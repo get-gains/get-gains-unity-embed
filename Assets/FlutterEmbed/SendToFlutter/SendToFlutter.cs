@@ -14,4 +14,6 @@ public class SendToFlutter
         {
             sendToFlutterClass.CallStatic("sendToFlutter", data);
         }
+#endif
+    }
 }
