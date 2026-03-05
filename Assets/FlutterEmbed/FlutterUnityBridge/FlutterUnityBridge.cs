@@ -4,6 +4,7 @@ using UnityEngine;
 /// Bridge script for Flutter ↔ Unity messaging. The Flutter app calls these methods
 /// on the GameObject named "FlutterUnityBridge". Sends "scene_loaded" to Flutter when ready.
 /// Implements pose/skeleton: LoadPoseFrames, PlayPose, PausePose, SeekPoseFrame, SetSkeletonColor, SetCameraAngle.
+/// Camera is managed by OrbitCameraController (touch orbit + pinch zoom).
 /// </summary>
 public class FlutterUnityBridge : MonoBehaviour
 {
@@ -16,12 +17,12 @@ public class FlutterUnityBridge : MonoBehaviour
     private PosePlaybackController posePlaybackController;
 
     [SerializeField]
-    [Tooltip("Optional. Camera to orbit for SetCameraAngle (FRONT, SIDE_LEFT, etc.).")]
+    [Tooltip("Optional. Camera used for pose viewing. OrbitCameraController is added at runtime.")]
     private Camera poseCamera;
 
+    private OrbitCameraController _orbitController;
     private float rotationSpeed;
     private bool sceneLoadedSent;
-    private string _lastCameraAngle = "FRONT";
 
     private void Awake()
     {
@@ -45,6 +46,19 @@ public class FlutterUnityBridge : MonoBehaviour
         posePlaybackController.SetRenderer(renderer);
     }
 
+    /// <summary>Lazy-create orbit controller on the camera so touch orbit/zoom works.</summary>
+    private OrbitCameraController EnsureOrbitController()
+    {
+        if (_orbitController != null) return _orbitController;
+        if (poseCamera == null) return null;
+
+        _orbitController = poseCamera.GetComponent<OrbitCameraController>();
+        if (_orbitController == null)
+            _orbitController = poseCamera.gameObject.AddComponent<OrbitCameraController>();
+        _orbitController.SetCamera(poseCamera);
+        return _orbitController;
+    }
+
     private void Start()
     {
         SendSceneLoadedOnce();
@@ -60,6 +74,17 @@ public class FlutterUnityBridge : MonoBehaviour
         }
         if (rotatableTarget != null && rotatableTarget.gameObject.activeInHierarchy && rotationSpeed != 0f)
             rotatableTarget.Rotate(Vector3.up, rotationSpeed * Time.deltaTime);
+
+        UpdateOrbitTarget();
+    }
+
+    /// <summary>Keep orbit target in sync with figure center during playback.</summary>
+    private void UpdateOrbitTarget()
+    {
+        if (_orbitController == null) return;
+        var renderer = GetFigureRenderer();
+        if (renderer != null && renderer.FigureHeight > 0.1f)
+            _orbitController.UpdateTarget(renderer.FigureCenter);
     }
 
     public void SetRotationSpeed(string message)
@@ -119,20 +144,38 @@ public class FlutterUnityBridge : MonoBehaviour
     }
 
     /// <summary>
-    /// Orbit camera around the figure center. Supported angles:
-    /// FRONT, SIDE_LEFT, SIDE_RIGHT, REAR, ANGLE_45_LEFT, ANGLE_45_RIGHT.
+    /// Set camera angle preset. Routes through OrbitCameraController so user
+    /// can still freely orbit/zoom after the preset is applied.
     /// </summary>
     public void SetCameraAngle(string message)
     {
-        if (poseCamera == null) return;
-        _lastCameraAngle = (message ?? "").Trim().ToUpperInvariant();
-        ApplyCameraAngle();
+        var orbit = EnsureOrbitController();
+        if (orbit != null)
+        {
+            orbit.SetAnglePreset(message);
+        }
+        else if (poseCamera != null)
+        {
+            // Fallback: direct positioning when orbit controller unavailable
+            ApplyCameraAngleDirect(message);
+        }
     }
 
-    private void ApplyCameraAngle()
+    /// <summary>Auto-frame camera to fit the loaded figure via orbit controller.</summary>
+    private void FrameCameraToFigure()
     {
-        if (poseCamera == null) return;
+        var renderer = GetFigureRenderer();
+        if (renderer == null || renderer.FigureHeight < 0.1f) return;
 
+        var orbit = EnsureOrbitController();
+        if (orbit != null)
+            orbit.SetTarget(renderer.FigureCenter, renderer.FigureHeight);
+    }
+
+    /// <summary>Direct camera positioning fallback (no orbit controller).</summary>
+    private void ApplyCameraAngleDirect(string message)
+    {
+        string angle = (message ?? "").Trim().ToUpperInvariant();
         Vector3 target = Vector3.zero;
         float figHeight = 3f;
 
@@ -147,7 +190,7 @@ public class FlutterUnityBridge : MonoBehaviour
         distance = Mathf.Max(distance, 2f);
 
         Vector3 offset;
-        switch (_lastCameraAngle)
+        switch (angle)
         {
             case "FRONT":          offset = new Vector3(0, 0, -distance); break;
             case "SIDE_LEFT":      offset = new Vector3(-distance, 0, 0); break;
@@ -160,12 +203,6 @@ public class FlutterUnityBridge : MonoBehaviour
 
         poseCamera.transform.position = target + offset;
         poseCamera.transform.LookAt(target);
-    }
-
-    /// <summary>Auto-frame camera to fit the loaded figure.</summary>
-    private void FrameCameraToFigure()
-    {
-        ApplyCameraAngle();
     }
 
     private PoseStickFigureRenderer GetFigureRenderer()
