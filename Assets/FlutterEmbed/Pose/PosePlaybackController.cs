@@ -8,6 +8,7 @@ using UnityEngine;
 public class PosePlaybackController : MonoBehaviour
 {
     [SerializeField] private PoseStickFigureRenderer poseRenderer;
+    [SerializeField] private HumanoidPoseDriver humanoidDriver;
 
     public void SetRenderer(PoseStickFigureRenderer renderer) { poseRenderer = renderer; }
 
@@ -23,6 +24,8 @@ public class PosePlaybackController : MonoBehaviour
     {
         if (poseRenderer == null)
             poseRenderer = GetComponentInChildren<PoseStickFigureRenderer>();
+        if (humanoidDriver == null)
+            humanoidDriver = GetComponentInChildren<HumanoidPoseDriver>();
     }
 
     private void Update()
@@ -87,9 +90,15 @@ public class PosePlaybackController : MonoBehaviour
 
     private void UpdateRenderer()
     {
-        if (poseRenderer == null || _frames == null || _frames.Count == 0) return;
+        if (_frames == null || _frames.Count == 0) return;
         int idx = Mathf.Clamp(_currentFrameIndex, 0, _frames.Count - 1);
-        poseRenderer.UpdateFrame(_frames[idx].Landmarks);
+        var landmarks = _frames[idx].Landmarks;
+
+        if (poseRenderer != null)
+            poseRenderer.UpdateFrame(landmarks);
+
+        if (humanoidDriver != null)
+            humanoidDriver.ApplyPose(landmarks);
     }
 
     public int CurrentFrameIndex => _currentFrameIndex;
