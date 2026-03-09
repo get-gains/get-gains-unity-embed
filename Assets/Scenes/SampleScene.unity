@@ -557,51 +557,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::HumanoidPoseDriver
   animator: {fileID: 0}
-  mappings:
-  - Bone: 13
-    ChildBone: 15
-    FromLandmark: LEFT_SHOULDER
-    ToLandmark: LEFT_ELBOW
-  - Bone: 15
-    ChildBone: 17
-    FromLandmark: LEFT_ELBOW
-    ToLandmark: LEFT_WRIST
-  - Bone: 14
-    ChildBone: 16
-    FromLandmark: RIGHT_SHOULDER
-    ToLandmark: RIGHT_ELBOW
-  - Bone: 16
-    ChildBone: 18
-    FromLandmark: RIGHT_ELBOW
-    ToLandmark: RIGHT_WRIST
-  - Bone: 1
-    ChildBone: 3
-    FromLandmark: LEFT_HIP
-    ToLandmark: LEFT_KNEE
-  - Bone: 3
-    ChildBone: 5
-    FromLandmark: LEFT_KNEE
-    ToLandmark: LEFT_ANKLE
-  - Bone: 2
-    ChildBone: 4
-    FromLandmark: RIGHT_HIP
-    ToLandmark: RIGHT_KNEE
-  - Bone: 4
-    ChildBone: 6
-    FromLandmark: RIGHT_KNEE
-    ToLandmark: RIGHT_ANKLE
-  - Bone: 7
-    ChildBone: 8
-    FromLandmark: PELVIS_CENTER
-    ToLandmark: CHEST_CENTER
-  - Bone: 8
-    ChildBone: 9
-    FromLandmark: CHEST_CENTER
-    ToLandmark: NECK_CENTER
-  - Bone: 9
-    ChildBone: 10
-    FromLandmark: NECK_CENTER
-    ToLandmark: NOSE
+  poseScale: 5
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

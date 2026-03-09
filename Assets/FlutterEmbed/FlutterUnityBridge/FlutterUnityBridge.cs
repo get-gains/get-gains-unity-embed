@@ -1,24 +1,16 @@
 using UnityEngine;
 
 /// <summary>
-/// Bridge script for Flutter ↔ Unity messaging. The Flutter app calls these methods
-/// on the GameObject named "FlutterUnityBridge". Sends "scene_loaded" to Flutter when ready.
-/// Implements pose/skeleton: LoadPoseFrames, PlayPose, PausePose, SeekPoseFrame, SetSkeletonColor, SetCameraAngle.
-/// Camera is managed by OrbitCameraController (touch orbit + pinch zoom).
+/// Bridge script for Flutter-Unity messaging. Sends "scene_loaded" to Flutter when ready.
+/// Implements pose: LoadPoseFrames, PlayPose, PausePose, SeekPoseFrame, SetSkeletonColor, SetCameraAngle.
+/// Camera is managed by OrbitCameraController (touch orbit + pinch zoom via New Input System).
+/// If a HumanoidPoseDriver exists in the scene, it drives the humanoid rig and hides the stick figure.
 /// </summary>
 public class FlutterUnityBridge : MonoBehaviour
 {
-    [SerializeField]
-    [Tooltip("Optional. If null, a child cube is created for rotation.")]
-    private Transform rotatableTarget;
-
-    [SerializeField]
-    [Tooltip("Optional. If null, pose playback is created at runtime (stick figure).")]
-    private PosePlaybackController posePlaybackController;
-
-    [SerializeField]
-    [Tooltip("Optional. Camera used for pose viewing. OrbitCameraController is added at runtime.")]
-    private Camera poseCamera;
+    [SerializeField] private Transform rotatableTarget;
+    [SerializeField] private PosePlaybackController posePlaybackController;
+    [SerializeField] private Camera poseCamera;
 
     private OrbitCameraController _orbitController;
     private float rotationSpeed;
@@ -31,22 +23,31 @@ public class FlutterUnityBridge : MonoBehaviour
         SendSceneLoadedOnce();
     }
 
-    /// <summary>Create pose playback + stick figure on first use so initial scene load stays light.</summary>
     private void EnsurePosePlayback()
     {
         if (posePlaybackController != null) return;
+
         var poseGo = new GameObject("PosePlayback");
         poseGo.transform.SetParent(transform);
         poseGo.transform.localPosition = Vector3.zero;
+
         var rendererGo = new GameObject("PoseStickFigure");
         rendererGo.transform.SetParent(poseGo.transform);
         rendererGo.transform.localPosition = Vector3.zero;
         var renderer = rendererGo.AddComponent<PoseStickFigureRenderer>();
+
         posePlaybackController = poseGo.AddComponent<PosePlaybackController>();
         posePlaybackController.SetRenderer(renderer);
+
+        // Look for a HumanoidPoseDriver anywhere in the scene (e.g. on HumanBasemesh).
+        var humanoid = FindAnyObjectByType<HumanoidPoseDriver>();
+        if (humanoid != null)
+        {
+            posePlaybackController.SetHumanoidDriver(humanoid);
+            Debug.Log($"[FlutterUnityBridge] Found humanoid rig: {humanoid.gameObject.name}");
+        }
     }
 
-    /// <summary>Lazy-create orbit controller on the camera so touch orbit/zoom works.</summary>
     private OrbitCameraController EnsureOrbitController()
     {
         if (_orbitController != null) return _orbitController;
@@ -78,7 +79,6 @@ public class FlutterUnityBridge : MonoBehaviour
         UpdateOrbitTarget();
     }
 
-    /// <summary>Keep orbit target in sync with figure center during playback.</summary>
     private void UpdateOrbitTarget()
     {
         if (_orbitController == null) return;
@@ -143,25 +143,15 @@ public class FlutterUnityBridge : MonoBehaviour
             posePlaybackController.SetSkeletonColor(color);
     }
 
-    /// <summary>
-    /// Set camera angle preset. Routes through OrbitCameraController so user
-    /// can still freely orbit/zoom after the preset is applied.
-    /// </summary>
     public void SetCameraAngle(string message)
     {
         var orbit = EnsureOrbitController();
         if (orbit != null)
-        {
             orbit.SetAnglePreset(message);
-        }
         else if (poseCamera != null)
-        {
-            // Fallback: direct positioning when orbit controller unavailable
             ApplyCameraAngleDirect(message);
-        }
     }
 
-    /// <summary>Auto-frame camera to fit the loaded figure via orbit controller.</summary>
     private void FrameCameraToFigure()
     {
         var renderer = GetFigureRenderer();
@@ -172,7 +162,6 @@ public class FlutterUnityBridge : MonoBehaviour
             orbit.SetTarget(renderer.FigureCenter, renderer.FigureHeight);
     }
 
-    /// <summary>Direct camera positioning fallback (no orbit controller).</summary>
     private void ApplyCameraAngleDirect(string message)
     {
         string angle = (message ?? "").Trim().ToUpperInvariant();

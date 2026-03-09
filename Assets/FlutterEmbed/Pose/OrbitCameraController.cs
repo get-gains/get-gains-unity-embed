@@ -1,9 +1,11 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.EnhancedTouch;
+using ETouch = UnityEngine.InputSystem.EnhancedTouch;
 
 /// <summary>
-/// Touch-driven orbit camera that orbits around a target point (the pose figure center).
-/// Single-finger drag rotates (orbit). Two-finger pinch zooms (dolly).
-/// Attach to the same GameObject as the Camera, or assign the camera via SetCamera().
+/// Touch-driven orbit camera using the New Input System (EnhancedTouch).
+/// Single-finger drag = orbit. Two-finger pinch = zoom. Camera always LookAt target.
 /// </summary>
 public class OrbitCameraController : MonoBehaviour
 {
@@ -32,21 +34,23 @@ public class OrbitCameraController : MonoBehaviour
     private float _prevPinchDist;
     private bool _initialized;
 
+    private void OnEnable()
+    {
+        EnhancedTouchSupport.Enable();
+    }
+
+    private void OnDisable()
+    {
+        EnhancedTouchSupport.Disable();
+    }
+
     private void Awake()
     {
         _cam = GetComponent<Camera>();
     }
 
-    /// <summary>Assign external camera if this script is not on the Camera GameObject.</summary>
-    public void SetCamera(Camera cam)
-    {
-        _cam = cam;
-    }
+    public void SetCamera(Camera cam) { _cam = cam; }
 
-    /// <summary>
-    /// Anchor the orbit around [center] and set initial distance so the figure fills the view.
-    /// Called by FlutterUnityBridge after frames are loaded.
-    /// </summary>
     public void SetTarget(Vector3 center, float figureHeight)
     {
         _target = center;
@@ -62,10 +66,6 @@ public class OrbitCameraController : MonoBehaviour
         ApplyImmediate();
     }
 
-    /// <summary>
-    /// Set the orbital yaw/pitch from a named camera angle preset.
-    /// Resets user rotation to the chosen angle.
-    /// </summary>
     public void SetAnglePreset(string angle)
     {
         switch ((angle ?? "").Trim().ToUpperInvariant())
@@ -83,17 +83,13 @@ public class OrbitCameraController : MonoBehaviour
         ApplyImmediate();
     }
 
-    /// <summary>Update the orbit target each frame (figure may move during playback).</summary>
-    public void UpdateTarget(Vector3 center)
-    {
-        _target = center;
-    }
+    public void UpdateTarget(Vector3 center) { _target = center; }
 
     private void LateUpdate()
     {
         if (!_initialized || _cam == null) return;
 
-        HandleTouchInput();
+        HandleInput();
 
         _yaw = Mathf.SmoothDamp(_yaw, _targetYaw, ref _yawVel, smoothTime);
         _pitch = Mathf.SmoothDamp(_pitch, _targetPitch, ref _pitchVel, smoothTime);
@@ -102,31 +98,36 @@ public class OrbitCameraController : MonoBehaviour
         ApplyOrbit();
     }
 
-    private void HandleTouchInput()
+    private void HandleInput()
     {
-        int touchCount = Input.touchCount;
+        var touches = ETouch.Touch.activeTouches;
+        int count = touches.Count;
 
-        if (touchCount == 1)
+        if (count == 1)
         {
-            Touch t = Input.GetTouch(0);
-            if (t.phase == TouchPhase.Moved)
+            var t = touches[0];
+            if (t.phase == UnityEngine.InputSystem.TouchPhase.Moved)
             {
-                _targetYaw += t.deltaPosition.x * orbitSpeed;
-                _targetPitch -= t.deltaPosition.y * orbitSpeed;
+                Vector2 delta = t.delta;
+                _targetYaw += delta.x * orbitSpeed;
+                _targetPitch -= delta.y * orbitSpeed;
                 _targetPitch = Mathf.Clamp(_targetPitch, minPitch, maxPitch);
             }
         }
-        else if (touchCount >= 2)
+        else if (count >= 2)
         {
-            Touch t0 = Input.GetTouch(0);
-            Touch t1 = Input.GetTouch(1);
-            float curDist = Vector2.Distance(t0.position, t1.position);
+            var t0 = touches[0];
+            var t1 = touches[1];
+            float curDist = Vector2.Distance(t0.screenPosition, t1.screenPosition);
 
-            if (t0.phase == TouchPhase.Began || t1.phase == TouchPhase.Began)
+            bool justBegan = t0.phase == UnityEngine.InputSystem.TouchPhase.Began
+                          || t1.phase == UnityEngine.InputSystem.TouchPhase.Began;
+
+            if (justBegan)
             {
                 _prevPinchDist = curDist;
             }
-            else if (t0.phase == TouchPhase.Moved || t1.phase == TouchPhase.Moved)
+            else
             {
                 float delta = curDist - _prevPinchDist;
                 _targetDist -= delta * zoomSpeed;
@@ -135,21 +136,23 @@ public class OrbitCameraController : MonoBehaviour
             }
         }
 
-#if UNITY_EDITOR
-        // Mouse fallback for editor testing: right-drag to orbit, scroll to zoom
-        if (Input.GetMouseButton(1))
+        // Mouse fallback for editor
+        if (Mouse.current != null)
         {
-            _targetYaw += Input.GetAxis("Mouse X") * orbitSpeed * 8f;
-            _targetPitch -= Input.GetAxis("Mouse Y") * orbitSpeed * 8f;
-            _targetPitch = Mathf.Clamp(_targetPitch, minPitch, maxPitch);
+            if (Mouse.current.rightButton.isPressed)
+            {
+                Vector2 mouseDelta = Mouse.current.delta.ReadValue();
+                _targetYaw += mouseDelta.x * orbitSpeed * 0.3f;
+                _targetPitch -= mouseDelta.y * orbitSpeed * 0.3f;
+                _targetPitch = Mathf.Clamp(_targetPitch, minPitch, maxPitch);
+            }
+            float scroll = Mouse.current.scroll.ReadValue().y;
+            if (Mathf.Abs(scroll) > 0.1f)
+            {
+                _targetDist -= scroll * 0.01f;
+                _targetDist = Mathf.Clamp(_targetDist, minDistance, maxDistance);
+            }
         }
-        float scroll = Input.GetAxis("Mouse ScrollWheel");
-        if (Mathf.Abs(scroll) > 0.001f)
-        {
-            _targetDist -= scroll * 3f;
-            _targetDist = Mathf.Clamp(_targetDist, minDistance, maxDistance);
-        }
-#endif
     }
 
     private void ApplyOrbit()
@@ -162,9 +165,7 @@ public class OrbitCameraController : MonoBehaviour
 
     private void ApplyImmediate()
     {
-        _yawVel = 0f;
-        _pitchVel = 0f;
-        _distVel = 0f;
+        _yawVel = _pitchVel = _distVel = 0f;
         if (_cam != null) ApplyOrbit();
     }
 }

@@ -3,7 +3,8 @@ using UnityEngine;
 
 /// <summary>
 /// Holds loaded pose frames and drives playback (current frame index, play/pause, seek).
-/// Updates the assigned PoseStickFigureRenderer each frame.
+/// Updates both the stick figure renderer AND the humanoid pose driver if present.
+/// When a humanoid is connected, the stick figure is hidden automatically.
 /// </summary>
 public class PosePlaybackController : MonoBehaviour
 {
@@ -11,6 +12,13 @@ public class PosePlaybackController : MonoBehaviour
     [SerializeField] private HumanoidPoseDriver humanoidDriver;
 
     public void SetRenderer(PoseStickFigureRenderer renderer) { poseRenderer = renderer; }
+
+    public void SetHumanoidDriver(HumanoidPoseDriver driver)
+    {
+        humanoidDriver = driver;
+        if (humanoidDriver != null && poseRenderer != null)
+            poseRenderer.SetVisible(false);
+    }
 
     private List<PoseFrame> _frames = new List<PoseFrame>();
     private int _currentFrameIndex;
@@ -94,10 +102,17 @@ public class PosePlaybackController : MonoBehaviour
         int idx = Mathf.Clamp(_currentFrameIndex, 0, _frames.Count - 1);
         var landmarks = _frames[idx].Landmarks;
 
-        if (poseRenderer != null)
-            poseRenderer.UpdateFrame(landmarks);
+        bool hasHumanoid = humanoidDriver != null;
 
-        if (humanoidDriver != null)
+        if (poseRenderer != null)
+        {
+            if (hasHumanoid)
+                poseRenderer.SetVisible(false);
+            else
+                poseRenderer.UpdateFrame(landmarks);
+        }
+
+        if (hasHumanoid)
             humanoidDriver.ApplyPose(landmarks);
     }
 
