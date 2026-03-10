@@ -82,6 +82,15 @@ public class FlutterUnityBridge : MonoBehaviour
     private void UpdateOrbitTarget()
     {
         if (_orbitController == null) return;
+
+        // Prefer humanoid driver for tracking when present (stick figure is hidden).
+        var humanoid = GetHumanoidDriver();
+        if (humanoid != null && humanoid.FigureHeight > 0.1f)
+        {
+            _orbitController.UpdateTarget(humanoid.FigureCenter);
+            return;
+        }
+
         var renderer = GetFigureRenderer();
         if (renderer != null && renderer.FigureHeight > 0.1f)
             _orbitController.UpdateTarget(renderer.FigureCenter);
@@ -154,12 +163,29 @@ public class FlutterUnityBridge : MonoBehaviour
 
     private void FrameCameraToFigure()
     {
-        var renderer = GetFigureRenderer();
-        if (renderer == null || renderer.FigureHeight < 0.1f) return;
+        Vector3 center = Vector3.zero;
+        float height = 0f;
 
+        var humanoid = GetHumanoidDriver();
+        if (humanoid != null && humanoid.FigureHeight > 0.1f)
+        {
+            center = humanoid.FigureCenter;
+            height = humanoid.FigureHeight;
+        }
+        else
+        {
+            var renderer = GetFigureRenderer();
+            if (renderer != null && renderer.FigureHeight > 0.1f)
+            {
+                center = renderer.FigureCenter;
+                height = renderer.FigureHeight;
+            }
+        }
+
+        if (height < 0.1f) return;
         var orbit = EnsureOrbitController();
         if (orbit != null)
-            orbit.SetTarget(renderer.FigureCenter, renderer.FigureHeight);
+            orbit.SetTarget(center, height);
     }
 
     private void ApplyCameraAngleDirect(string message)
@@ -198,6 +224,12 @@ public class FlutterUnityBridge : MonoBehaviour
     {
         if (posePlaybackController == null) return null;
         return posePlaybackController.GetComponentInChildren<PoseStickFigureRenderer>();
+    }
+
+    private HumanoidPoseDriver GetHumanoidDriver()
+    {
+        if (posePlaybackController == null) return null;
+        return FindAnyObjectByType<HumanoidPoseDriver>();
     }
 
     public void SendToFlutterMessage(string message)
