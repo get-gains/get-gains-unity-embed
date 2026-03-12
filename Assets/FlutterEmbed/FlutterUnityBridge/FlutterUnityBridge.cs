@@ -3,6 +3,7 @@ using UnityEngine;
 /// <summary>
 /// Bridge script for Flutter-Unity messaging. Sends "scene_loaded" to Flutter when ready.
 /// Implements pose: LoadPoseFrames, PlayPose, PausePose, SeekPoseFrame, SetSkeletonColor, SetCameraAngle.
+/// Implements cosmetics: LoadEquippedCosmetics, PreviewCosmetic, ClearPreview (delegates to CosmeticManager).
 /// Camera is managed by OrbitCameraController (touch orbit + pinch zoom via New Input System).
 /// If a HumanoidPoseDriver exists in the scene, it drives the humanoid rig and hides the stick figure.
 /// </summary>
@@ -11,6 +12,7 @@ public class FlutterUnityBridge : MonoBehaviour
     [SerializeField] private Transform rotatableTarget;
     [SerializeField] private PosePlaybackController posePlaybackController;
     [SerializeField] private Camera poseCamera;
+    [SerializeField] private CosmeticManager cosmeticManager;
 
     private OrbitCameraController _orbitController;
     private float rotationSpeed;
@@ -230,6 +232,65 @@ public class FlutterUnityBridge : MonoBehaviour
     {
         if (posePlaybackController == null) return null;
         return FindAnyObjectByType<HumanoidPoseDriver>();
+    }
+
+    // ── Cosmetics ──
+
+    private CosmeticManager EnsureCosmeticManager()
+    {
+        if (cosmeticManager != null) return cosmeticManager;
+
+        cosmeticManager = FindAnyObjectByType<CosmeticManager>();
+        if (cosmeticManager != null)
+        {
+            Debug.Log($"[FlutterUnityBridge] Found CosmeticManager on: {cosmeticManager.gameObject.name}");
+        }
+        else
+        {
+            Debug.LogWarning("[FlutterUnityBridge] No CosmeticManager found in scene. Cosmetic commands will be ignored.");
+        }
+        return cosmeticManager;
+    }
+
+    public void LoadEquippedCosmetics(string message)
+    {
+        var mgr = EnsureCosmeticManager();
+        if (mgr != null)
+        {
+            mgr.LoadCosmetics(message);
+        }
+        else
+        {
+            Debug.LogWarning("[FlutterUnityBridge] LoadEquippedCosmetics: no CosmeticManager available.");
+            SendToFlutter.Send("cosmetics_loaded");
+        }
+    }
+
+    public void PreviewCosmetic(string message)
+    {
+        var mgr = EnsureCosmeticManager();
+        if (mgr != null)
+        {
+            mgr.PreviewCosmetic(message);
+        }
+        else
+        {
+            Debug.LogWarning("[FlutterUnityBridge] PreviewCosmetic: no CosmeticManager available.");
+        }
+    }
+
+    public void ClearPreview(string message)
+    {
+        var mgr = EnsureCosmeticManager();
+        if (mgr != null)
+        {
+            mgr.ClearPreview();
+        }
+        else
+        {
+            Debug.LogWarning("[FlutterUnityBridge] ClearPreview: no CosmeticManager available.");
+            SendToFlutter.Send("cosmetics_loaded");
+        }
     }
 
     public void SendToFlutterMessage(string message)
