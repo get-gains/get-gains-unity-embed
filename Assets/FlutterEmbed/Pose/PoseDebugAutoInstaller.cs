@@ -13,6 +13,9 @@ public static class PoseDebugAutoInstaller
         var driver = Object.FindAnyObjectByType<HumanoidPoseDriver>();
         if (driver == null) return;
 
+        // Ensure depth invert is off by default so debug menu and runtime start in the same state.
+        driver.InvertLandmarkZ = false;
+
         var menu = driver.GetComponent<PoseDebugMenuSimple>();
         if (menu == null)
         {
