@@ -26,17 +26,40 @@ public class HumanoidPoseDriver : MonoBehaviour
     [SerializeField] private float poseDepthScale = 5f;
     [Tooltip("Invert landmark X so left/right matches 2D (person left = Unity -X when facing +Z).")]
     [SerializeField] private bool invertLandmarkX = true;
-    [Tooltip("MLKit: negative Z = toward camera (front). Invert so front maps to Unity +Z (in front of character).")]
-    [SerializeField] private bool invertLandmarkZ = true;
+    [Tooltip("MLKit: negative Z = toward camera (front). When false, use MLKit Z as-is; enable only if front/back is flipped.")]
+    [SerializeField] private bool invertLandmarkZ = false;
     [Tooltip("Flatten only Hips (spine) direction to XY to avoid Z-twist on torso.")]
     [SerializeField] private bool flattenDirectionsToXY = true;
     [Tooltip("If rig faces -Z (common), flip limb forward so bicep curl is in front, not behind.")]
     [SerializeField] private bool flipLimbForwardZ = true;
+    [Tooltip("Drive neck/head from HEAD_CENTER so skull follows face, not anchored.")]
+    [SerializeField] private bool driveHead = true;
+    [Tooltip("Flip head/neck Z if face points backwards relative to camera.")]
+    [SerializeField] private bool invertHeadZ = false;
     [Tooltip("MLKit z is not 0-1; divide raw z by this so depth stays sensible (e.g. 100).")]
     [SerializeField] private float zNormalizeScale = 100f;
     [Tooltip("Clamp normalized X,Y to this range so out-of-frame landmarks don't blow up (MediaPipe can return outside 0-1).")]
     [SerializeField] private float xyClampMin = -0.2f;
     [SerializeField] private float xyClampMax = 1.2f;
+
+    // Runtime access for debug tools (inverts / options that affect pose mapping)
+    public bool InvertLandmarkX { get => invertLandmarkX; set => invertLandmarkX = value; }
+    public bool InvertLandmarkZ { get => invertLandmarkZ; set => invertLandmarkZ = value; }
+    public bool FlattenDirectionsToXY { get => flattenDirectionsToXY; set => flattenDirectionsToXY = value; }
+    public bool FlipLimbForwardZ { get => flipLimbForwardZ; set => flipLimbForwardZ = value; }
+
+    // Runtime access for arm/limb tuning
+    public float SmoothSpeed { get => smoothSpeed; set => smoothSpeed = Mathf.Max(0.1f, value); }
+    public float MaxRotationPerFrame
+    {
+        get => maxRotationPerFrame;
+        set => maxRotationPerFrame = Mathf.Clamp(value, 0f, 360f);
+    }
+    public float LimbBlend
+    {
+        get => limbBlend;
+        set => limbBlend = Mathf.Clamp(value, 0.2f, 1f);
+    }
 
     [Header("Stability (reference: ganeshsar, MediaPipe-UnitySolver)")]
     [Tooltip("Lerp speed toward target rotation per second (higher = snappier). ~10–15 stable.")]
@@ -215,7 +238,8 @@ public class HumanoidPoseDriver : MonoBehaviour
             if (!_pos.TryGetValue(rb.From, out Vector3 from)) continue;
             if (!_pos.TryGetValue(rb.To, out Vector3 to)) continue;
 
-            if (rb.From == "MID_SHOULDER" && rb.To == "HEAD_CENTER") continue; // neck: skip to avoid face/skull disconnect
+            bool isNeck = rb.From == "MID_SHOULDER" && rb.To == "HEAD_CENTER";
+            if (isNeck && !driveHead) continue; // allow disabling head driving if it misbehaves
 
             bool isArm = isArmBone(rb.From, rb.To);
             if (isArm && _confidence.TryGetValue(rb.From, out float cf) && _confidence.TryGetValue(rb.To, out float ct))
@@ -228,7 +252,14 @@ public class HumanoidPoseDriver : MonoBehaviour
 
             Vector3 targetDir = to - from;
             if (flatten) targetDir.z = 0f;
-            if (flipLimbForwardZ && isLimbBone(rb.From, rb.To)) targetDir.z = -targetDir.z; // rig often faces -Z; pose +Z (front) → -Z = limbs in front
+
+            // Flip limbs forward/back in Z for arms/legs only; neck uses its own invertHeadZ flag.
+            if (flipLimbForwardZ && isLimbBone(rb.From, rb.To) && !isNeck)
+                targetDir.z = -targetDir.z;
+
+            if (invertHeadZ && isNeck)
+                targetDir.z = -targetDir.z;
+
             if (targetDir.sqrMagnitude < 1e-6f) continue; // zero-length segment, skip
             targetDir.Normalize();
 

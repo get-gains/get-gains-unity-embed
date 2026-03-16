@@ -47,6 +47,16 @@ public class FlutterUnityBridge : MonoBehaviour
         {
             posePlaybackController.SetHumanoidDriver(humanoid);
             Debug.Log($"[FlutterUnityBridge] Found humanoid rig: {humanoid.gameObject.name}");
+
+            // Ensure a PoseDebugMenuSimple exists so debug controls are always available in the embedded scene.
+            var debugMenu = humanoid.GetComponent<PoseDebugMenuSimple>();
+            if (debugMenu == null)
+            {
+                debugMenu = humanoid.gameObject.AddComponent<PoseDebugMenuSimple>();
+                // StartVisible = true so the window is shown on first load; user can hide it via the bottom bar.
+                var startVisibleField = typeof(PoseDebugMenuSimple).GetField("startVisible", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if (startVisibleField != null) startVisibleField.SetValue(debugMenu, true);
+            }
         }
         if (preferStickFigureOnly && posePlaybackController != null)
             posePlaybackController.SetUseStickFigureOnly(true);

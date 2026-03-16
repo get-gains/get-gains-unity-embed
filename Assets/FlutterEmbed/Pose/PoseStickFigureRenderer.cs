@@ -14,8 +14,8 @@ public class PoseStickFigureRenderer : MonoBehaviour
     [SerializeField] private float depthScale = 5f;
     [Tooltip("Invert X to match 2D raw vertices (must match HumanoidPoseDriver.invertLandmarkX).")]
     [SerializeField] private bool invertLandmarkX = true;
-    [Tooltip("Invert Z so front (MLKit negative Z) = Unity +Z; must match HumanoidPoseDriver.invertLandmarkZ.")]
-    [SerializeField] private bool invertLandmarkZ = true;
+    [Tooltip("Invert Z so front (MLKit negative Z) = Unity +Z; must match HumanoidPoseDriver.invertLandmarkZ. Default false to use MLKit Z as-is.")]
+    [SerializeField] private bool invertLandmarkZ = false;
     [Tooltip("Z from MLKit is not 0-1; divide by this before scaling (match HumanoidPoseDriver.zNormalizeScale).")]
     [SerializeField] private float zNormalizeScale = 100f;
     [Tooltip("Clamp raw X,Y to this range (match HumanoidPoseDriver.xyClampMin/Max).")]
