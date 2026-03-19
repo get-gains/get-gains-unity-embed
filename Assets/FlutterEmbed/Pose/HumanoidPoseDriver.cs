@@ -65,13 +65,19 @@ public class HumanoidPoseDriver : MonoBehaviour
     [Tooltip("Lerp speed toward target rotation per second (higher = snappier). ~10–15 stable.")]
     [SerializeField] private float smoothSpeed = 12f;
     [Tooltip("Max rotation change per bone per frame (degrees) to avoid single-frame spikes.")]
-    [SerializeField] private float maxRotationPerFrame = 90f;
+    [SerializeField] private float maxRotationPerFrame = 130f;
     [Tooltip("Blend for spine/hips (0.25–0.4). Lower = more stable, less follow.")]
     [Range(0.2f, 0.6f)]
     [SerializeField] private float spineBlend = 0.35f;
     [Tooltip("Blend for limbs (0.6–1). Higher = more responsive.")]
     [Range(0.5f, 1f)]
     [SerializeField] private float limbBlend = 0.75f;
+    [Header("Torso kinematics")]
+    [Tooltip("Use 4-point torso frame (L/R shoulders + L/R hips) to drive hips/spine/chest/neck as one kinematic chain.")]
+    [SerializeField] private bool useTorsoKinematics = true;
+    [Tooltip("How strongly torso chain follows the 4-point kinematic solve.")]
+    [Range(0f, 1f)]
+    [SerializeField] private float torsoKinematicBlend = 0.8f;
 
     private static readonly (HumanBodyBones Bone, HumanBodyBones Child, string From, string To)[] BoneMap =
     {
@@ -108,6 +114,13 @@ public class HumanoidPoseDriver : MonoBehaviour
         public float Blend;
     }
 
+    private struct TorsoRuntimeBone
+    {
+        public Transform Bone;
+        public Quaternion BindWorldRot;
+        public float Weight;
+    }
+
     private Transform _rootTransform;
     private Transform _hips;
     private Vector3 _bindHipsLocalPos;
@@ -115,12 +128,14 @@ public class HumanoidPoseDriver : MonoBehaviour
     private readonly List<RuntimeBone> _bones = new List<RuntimeBone>();
     private readonly Dictionary<string, Vector3> _pos = new Dictionary<string, Vector3>();
     private readonly Dictionary<string, float> _confidence = new Dictionary<string, float>();
+    private readonly List<TorsoRuntimeBone> _torsoBones = new List<TorsoRuntimeBone>();
     private bool _ready;
 
     private Vector3 _figureCenter;
     private float _figureHeight = 1f;
     private Vector3 _targetRootPosition;
     private float _targetScale = 1f;
+    private Quaternion _bindTorsoFrame = Quaternion.identity;
 
     public Vector3 FigureCenter => _figureCenter;
     public float FigureHeight => _figureHeight;
@@ -147,6 +162,8 @@ public class HumanoidPoseDriver : MonoBehaviour
                 _bindHeight = head.position.y - footY;
         }
         if (_bindHeight < 0.01f) _bindHeight = 1.8f;
+
+        CacheTorsoChain();
 
         _bones.Clear();
         foreach (var m in BoneMap)
@@ -225,6 +242,9 @@ public class HumanoidPoseDriver : MonoBehaviour
             _rootTransform.position = Vector3.Lerp(_rootTransform.position, _targetRootPosition, Time.deltaTime * smoothSpeed);
         }
 
+        if (useTorsoKinematics)
+            ApplyTorsoKinematics();
+
         // Per-bone: target rotation from bind reference (ganeshsar-style), then smooth (MediaPipe-style Slerp)
         bool isArmBone(string from, string to) =>
             (from.Contains("SHOULDER") && to.Contains("ELBOW")) || (from.Contains("ELBOW") && to.Contains("WRIST"));
@@ -235,6 +255,7 @@ public class HumanoidPoseDriver : MonoBehaviour
         foreach (var rb in _bones)
         {
             if (rb.Bone == null) continue;
+            if (useTorsoKinematics && IsTorsoDrivenBone(rb.Bone)) continue;
             if (!_pos.TryGetValue(rb.From, out Vector3 from)) continue;
             if (!_pos.TryGetValue(rb.To, out Vector3 to)) continue;
 
@@ -341,6 +362,128 @@ public class HumanoidPoseDriver : MonoBehaviour
             _pos["HEAD_CENTER"] = Vector3.Lerp(midSh, nose, 0.5f);
             _confidence["HEAD_CENTER"] = 1f;
         }
+    }
+
+    private void CacheTorsoChain()
+    {
+        _torsoBones.Clear();
+        if (animator == null) return;
+
+        HumanBodyBones[] candidates =
+        {
+            HumanBodyBones.Hips,
+            HumanBodyBones.Spine,
+            HumanBodyBones.Chest,
+            HumanBodyBones.UpperChest,
+            HumanBodyBones.Neck,
+        };
+
+        var chain = new List<Transform>();
+        foreach (var hb in candidates)
+        {
+            var t = animator.GetBoneTransform(hb);
+            if (t != null) chain.Add(t);
+        }
+
+        int n = chain.Count;
+        if (n == 0) return;
+
+        for (int i = 0; i < n; i++)
+        {
+            float w = n == 1 ? 1f : Mathf.Lerp(0.35f, 1f, i / (float)(n - 1));
+            _torsoBones.Add(new TorsoRuntimeBone
+            {
+                Bone = chain[i],
+                BindWorldRot = chain[i].rotation,
+                Weight = w,
+            });
+        }
+
+        if (_rootTransform != null)
+        {
+            Vector3 bindUp = _rootTransform.up;
+            Vector3 bindRight = _rootTransform.right;
+            if (TryGetBindTorsoAxes(out Vector3 up, out Vector3 right))
+            {
+                bindUp = up;
+                bindRight = right;
+            }
+
+            Vector3 bindForward = Vector3.Cross(bindRight, bindUp).normalized;
+            if (bindForward.sqrMagnitude < 1e-6f) bindForward = _rootTransform.forward;
+            _bindTorsoFrame = Quaternion.LookRotation(bindForward, bindUp);
+        }
+    }
+
+    private bool TryGetBindTorsoAxes(out Vector3 up, out Vector3 right)
+    {
+        up = Vector3.up;
+        right = Vector3.right;
+        if (animator == null) return false;
+
+        var lShoulder = animator.GetBoneTransform(HumanBodyBones.LeftUpperArm);
+        var rShoulder = animator.GetBoneTransform(HumanBodyBones.RightUpperArm);
+        var lHip = animator.GetBoneTransform(HumanBodyBones.LeftUpperLeg);
+        var rHip = animator.GetBoneTransform(HumanBodyBones.RightUpperLeg);
+        if (lShoulder == null || rShoulder == null || lHip == null || rHip == null) return false;
+
+        Vector3 midShoulder = 0.5f * (lShoulder.position + rShoulder.position);
+        Vector3 midHip = 0.5f * (lHip.position + rHip.position);
+        up = (midShoulder - midHip).normalized;
+        right = (rShoulder.position - lShoulder.position).normalized;
+        return up.sqrMagnitude > 1e-6f && right.sqrMagnitude > 1e-6f;
+    }
+
+    private void ApplyTorsoKinematics()
+    {
+        if (_torsoBones.Count == 0 || _rootTransform == null) return;
+        if (!_pos.TryGetValue("LEFT_SHOULDER", out Vector3 lShoulder)) return;
+        if (!_pos.TryGetValue("RIGHT_SHOULDER", out Vector3 rShoulder)) return;
+        if (!_pos.TryGetValue("LEFT_HIP", out Vector3 lHip)) return;
+        if (!_pos.TryGetValue("RIGHT_HIP", out Vector3 rHip)) return;
+
+        Vector3 midShoulder = 0.5f * (lShoulder + rShoulder);
+        Vector3 midHip = 0.5f * (lHip + rHip);
+        Vector3 torsoUpLocal = (midShoulder - midHip);
+        Vector3 torsoRightLocal = (rShoulder - lShoulder);
+        if (torsoUpLocal.sqrMagnitude < 1e-6f || torsoRightLocal.sqrMagnitude < 1e-6f) return;
+
+        torsoUpLocal.Normalize();
+        torsoRightLocal.Normalize();
+        Vector3 torsoForwardLocal = Vector3.Cross(torsoRightLocal, torsoUpLocal).normalized;
+        if (torsoForwardLocal.sqrMagnitude < 1e-6f) return;
+
+        Vector3 torsoUpWorld = _rootTransform.TransformDirection(torsoUpLocal).normalized;
+        Vector3 torsoForwardWorld = _rootTransform.TransformDirection(torsoForwardLocal).normalized;
+        Quaternion targetTorsoFrame = Quaternion.LookRotation(torsoForwardWorld, torsoUpWorld);
+        Quaternion torsoCorrection = targetTorsoFrame * Quaternion.Inverse(_bindTorsoFrame);
+        torsoCorrection = Quaternion.Slerp(Quaternion.identity, torsoCorrection, torsoKinematicBlend);
+
+        for (int i = 0; i < _torsoBones.Count; i++)
+        {
+            var tb = _torsoBones[i];
+            if (tb.Bone == null) continue;
+
+            Quaternion weightedCorrection = Quaternion.Slerp(Quaternion.identity, torsoCorrection, tb.Weight);
+            if (maxRotationPerFrame < 180f)
+            {
+                float angle = Quaternion.Angle(Quaternion.identity, weightedCorrection);
+                if (angle > maxRotationPerFrame && angle > 0.01f)
+                    weightedCorrection = Quaternion.Slerp(Quaternion.identity, weightedCorrection, maxRotationPerFrame / angle);
+            }
+
+            Quaternion targetWorldRot = weightedCorrection * tb.BindWorldRot;
+            tb.Bone.rotation = Quaternion.Slerp(tb.Bone.rotation, targetWorldRot, Time.deltaTime * smoothSpeed);
+        }
+    }
+
+    private bool IsTorsoDrivenBone(Transform bone)
+    {
+        for (int i = 0; i < _torsoBones.Count; i++)
+        {
+            if (_torsoBones[i].Bone == bone) return true;
+        }
+        return false;
     }
 
     private static bool IsValidFloat(float f)

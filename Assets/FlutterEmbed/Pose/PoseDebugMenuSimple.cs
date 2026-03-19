@@ -97,7 +97,7 @@ public class PoseDebugMenuSimple : MonoBehaviour
         GUILayout.Space(6);
         GUILayout.Label("Tips:");
         GUILayout.Label("- If arms lag or feel rubbery → increase Smooth speed or Limb blend.");
-        GUILayout.Label("- If arms snap or jitter → lower Max rot / frame or Smooth speed.");
+        GUILayout.Label("- Default Max rot / frame is 130°. Lower it if arms snap or jitter.");
         GUILayout.Label("- If arms swing behind body → tweak Flip limbs Z / Invert Z.");
 
         GUI.DragWindow(new Rect(0, 0, 400, 24));
