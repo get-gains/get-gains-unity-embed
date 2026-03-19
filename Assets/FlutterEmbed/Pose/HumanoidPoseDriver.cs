@@ -123,6 +123,7 @@ public class HumanoidPoseDriver : MonoBehaviour
 
     private Transform _rootTransform;
     private Transform _hips;
+    private Transform _head;
     private Vector3 _bindHipsLocalPos;
     private float _bindHeight;
     private readonly List<RuntimeBone> _bones = new List<RuntimeBone>();
@@ -136,6 +137,8 @@ public class HumanoidPoseDriver : MonoBehaviour
     private Vector3 _targetRootPosition;
     private float _targetScale = 1f;
     private Quaternion _bindTorsoFrame = Quaternion.identity;
+    private Quaternion _bindHeadFrame = Quaternion.identity;
+    private Quaternion _bindHeadWorldRot = Quaternion.identity;
 
     public Vector3 FigureCenter => _figureCenter;
     public float FigureHeight => _figureHeight;
@@ -148,6 +151,7 @@ public class HumanoidPoseDriver : MonoBehaviour
 
         _rootTransform = animator.transform;
         _hips = animator.GetBoneTransform(HumanBodyBones.Hips);
+        _head = animator.GetBoneTransform(HumanBodyBones.Head);
         if (_hips != null) _bindHipsLocalPos = _hips.localPosition;
 
         var head = animator.GetBoneTransform(HumanBodyBones.Head);
@@ -164,6 +168,7 @@ public class HumanoidPoseDriver : MonoBehaviour
         if (_bindHeight < 0.01f) _bindHeight = 1.8f;
 
         CacheTorsoChain();
+        CacheHeadReference();
 
         _bones.Clear();
         foreach (var m in BoneMap)
@@ -475,6 +480,10 @@ public class HumanoidPoseDriver : MonoBehaviour
             Quaternion targetWorldRot = weightedCorrection * tb.BindWorldRot;
             tb.Bone.rotation = Quaternion.Slerp(tb.Bone.rotation, targetWorldRot, Time.deltaTime * smoothSpeed);
         }
+
+        // Use torso frame + face landmarks to rotate the back of the skull toward the face.
+        if (driveHead)
+            ApplyHeadFromTorsoAndFace(torsoUpWorld);
     }
 
     private bool IsTorsoDrivenBone(Transform bone)
@@ -484,6 +493,79 @@ public class HumanoidPoseDriver : MonoBehaviour
             if (_torsoBones[i].Bone == bone) return true;
         }
         return false;
+    }
+
+    private void CacheHeadReference()
+    {
+        if (_head == null || _rootTransform == null)
+            return;
+
+        _bindHeadWorldRot = _head.rotation;
+
+        // Build a stable bind frame for head orientation.
+        Vector3 up = _rootTransform.up;
+        Vector3 right = _rootTransform.right;
+
+        if (TryGetBindTorsoAxes(out Vector3 torsoUp, out Vector3 torsoRight))
+        {
+            up = torsoUp;
+            right = torsoRight;
+        }
+
+        Vector3 forward = Vector3.Cross(right, up).normalized;
+        if (forward.sqrMagnitude < 1e-6f)
+            forward = _rootTransform.forward;
+
+        _bindHeadFrame = Quaternion.LookRotation(forward, up);
+    }
+
+    private void ApplyHeadFromTorsoAndFace(Vector3 torsoUpWorld)
+    {
+        if (_head == null || _rootTransform == null)
+            return;
+        if (!_pos.TryGetValue("LEFT_EAR", out Vector3 leftEar))
+            return;
+        if (!_pos.TryGetValue("RIGHT_EAR", out Vector3 rightEar))
+            return;
+        if (!_pos.TryGetValue("NOSE", out Vector3 nose))
+            return;
+
+        Vector3 earMid = 0.5f * (leftEar + rightEar);
+        Vector3 faceForwardLocal = nose - earMid; // back-of-skull -> face direction
+        Vector3 headRightLocal = rightEar - leftEar;
+        if (faceForwardLocal.sqrMagnitude < 1e-6f || headRightLocal.sqrMagnitude < 1e-6f)
+            return;
+
+        Vector3 faceForwardWorld = _rootTransform.TransformDirection(faceForwardLocal.normalized);
+        Vector3 headRightWorld = _rootTransform.TransformDirection(headRightLocal.normalized);
+
+        // Rebuild orthonormal frame while anchoring up to torso so head follows spine kinematics.
+        Vector3 up = torsoUpWorld.sqrMagnitude > 1e-6f ? torsoUpWorld.normalized : _rootTransform.up;
+        Vector3 right = Vector3.ProjectOnPlane(headRightWorld, up).normalized;
+        if (right.sqrMagnitude < 1e-6f)
+            right = Vector3.Cross(up, faceForwardWorld).normalized;
+        if (right.sqrMagnitude < 1e-6f)
+            return;
+
+        Vector3 forward = Vector3.Cross(right, up).normalized;
+        if (Vector3.Dot(forward, faceForwardWorld) < 0f)
+            forward = -forward;
+        if (forward.sqrMagnitude < 1e-6f)
+            return;
+
+        Quaternion targetHeadFrame = Quaternion.LookRotation(forward, up);
+        Quaternion correction = targetHeadFrame * Quaternion.Inverse(_bindHeadFrame);
+        correction = Quaternion.Slerp(Quaternion.identity, correction, torsoKinematicBlend);
+
+        if (maxRotationPerFrame < 180f)
+        {
+            float angle = Quaternion.Angle(Quaternion.identity, correction);
+            if (angle > maxRotationPerFrame && angle > 0.01f)
+                correction = Quaternion.Slerp(Quaternion.identity, correction, maxRotationPerFrame / angle);
+        }
+
+        Quaternion targetWorldRot = correction * _bindHeadWorldRot;
+        _head.rotation = Quaternion.Slerp(_head.rotation, targetWorldRot, Time.deltaTime * smoothSpeed);
     }
 
     private static bool IsValidFloat(float f)
