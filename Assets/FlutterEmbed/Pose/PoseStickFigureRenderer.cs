@@ -34,6 +34,8 @@ public class PoseStickFigureRenderer : MonoBehaviour
     {
         ("LEFT_EAR", "LEFT_EYE", BodyPart.Head),
         ("RIGHT_EAR", "RIGHT_EYE", BodyPart.Head),
+        ("LEFT_EAR", "NOSE", BodyPart.Head),
+        ("RIGHT_EAR", "NOSE", BodyPart.Head),
         ("LEFT_EYE", "NOSE", BodyPart.Head),
         ("RIGHT_EYE", "NOSE", BodyPart.Head),
         ("LEFT_SHOULDER", "RIGHT_SHOULDER", BodyPart.Torso),
