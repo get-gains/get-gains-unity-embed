@@ -95,6 +95,26 @@ public class PoseDebugMenuSimple : MonoBehaviour
         if (Mathf.Abs(newMaxRot - maxRot) > 0.5f) driver.MaxRotationPerFrame = newMaxRot;
 
         GUILayout.Space(6);
+        GUILayout.Label("Head/Face binding:");
+        string[] headModes =
+        {
+            "Face->Neck+Head",
+            "Lock Head->Neck",
+            "Face->Spine004"
+        };
+
+        int selected = 0;
+        if (driver.HeadFaceBindingModeSetting == HumanoidPoseDriver.HeadFaceBindingMode.LockHeadToNeck) selected = 1;
+        if (driver.HeadFaceBindingModeSetting == HumanoidPoseDriver.HeadFaceBindingMode.FaceDrivesSpine004) selected = 2;
+
+        selected = GUILayout.SelectionGrid(selected, headModes, 3);
+        driver.HeadFaceBindingModeSetting = selected == 0
+            ? HumanoidPoseDriver.HeadFaceBindingMode.FaceDrivesNeck
+            : selected == 1
+                ? HumanoidPoseDriver.HeadFaceBindingMode.LockHeadToNeck
+                : HumanoidPoseDriver.HeadFaceBindingMode.FaceDrivesSpine004;
+
+        GUILayout.Space(6);
         GUILayout.Label("Tips:");
         GUILayout.Label("- If arms lag or feel rubbery → increase Smooth speed or Limb blend.");
         GUILayout.Label("- Default Max rot / frame is 130°. Lower it if arms snap or jitter.");
