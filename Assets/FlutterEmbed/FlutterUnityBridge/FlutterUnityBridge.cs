@@ -41,7 +41,7 @@ public class FlutterUnityBridge : MonoBehaviour
         posePlaybackController = poseGo.AddComponent<PosePlaybackController>();
         posePlaybackController.SetRenderer(renderer);
 
-        // Look for a HumanoidPoseDriver anywhere in the scene (e.g. on HumanBasemesh).
+        // Look for a HumanoidPoseDriver anywhere in the scene (e.g. on the Mannequin rig root).
         var humanoid = FindAnyObjectByType<HumanoidPoseDriver>();
         if (humanoid != null)
         {

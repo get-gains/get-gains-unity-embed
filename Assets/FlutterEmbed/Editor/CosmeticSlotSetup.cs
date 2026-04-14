@@ -5,7 +5,7 @@ using UnityEditor;
 /// Editor utility to set up cosmetic attachment point Transforms on a character rig.
 ///
 /// Usage:
-///   1. Select the character rig root GameObject (e.g., HumanBasemesh) in the Hierarchy.
+///   1. Select the character rig root GameObject (e.g., Mannequin from Resources/Mannequin.fbx) in the Hierarchy.
 ///   2. Click Tools → GetGains → Setup Cosmetic Attachment Points.
 ///   3. The script creates child GameObjects for each slot and wires them to
 ///      the correct bones via the Animator's avatar humanoid mapping.
