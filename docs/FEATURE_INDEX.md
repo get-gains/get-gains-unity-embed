@@ -6,14 +6,14 @@
 
 ## Overview
 
-**Get Gains Unity Embed** is a Unity 6000.0 project embedded inside the Flutter Get Gains app via `flutter_embed_unity_6000_0_android`.  
+**Get Gains Unity Embed** is a Unity **6000.4.2** project (editor `6000.4.2f1`) embedded inside the Flutter Get Gains app via `flutter_embed_unity_6000_0_android`.  
 It renders interactive 3D content and exposes a bidirectional messaging bridge between Flutter and Unity.
 
 ### Technology Stack
 
 | Technology            | Version   | Purpose                                |
 | --------------------- | --------- | -------------------------------------- |
-| **Unity**             | 6000.0    | 3D engine / scene runtime              |
+| **Unity**             | 6000.4.2f1 | 3D engine / scene runtime              |
 | **C#**                | 10+       | Gameplay & bridge scripting            |
 | **flutter_embed_unity** | 6000_0  | Embedding Unity view into Flutter app  |
 
@@ -88,5 +88,5 @@ flutter-unity.md   → Detailed bridge contract and checklist
 
 ---
 
-_Last updated: March 5, 2026_
+_Last updated: April 15, 2026_
 
