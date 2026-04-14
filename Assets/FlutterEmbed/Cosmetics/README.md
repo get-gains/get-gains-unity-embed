@@ -16,7 +16,7 @@ This directory contains the cosmetic system for character customization.
 
 ### 1. Create Attachment Points on Character Rig
 
-Select the character rig root (e.g., HumanBasemesh) in the Hierarchy, then run:
+Select the character rig root (e.g., Mannequin from `Assets/Resources/Mannequin.fbx`) in the Hierarchy, then run:
 **Tools → GetGains → Setup Cosmetic Attachment Points**
 
 This creates empty child GameObjects on the correct bones:
