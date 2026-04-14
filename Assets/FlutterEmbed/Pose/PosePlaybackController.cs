@@ -5,19 +5,34 @@ using UnityEngine;
 /// Holds loaded pose frames and drives playback (current frame index, play/pause, seek).
 /// Updates both the stick figure renderer AND the humanoid pose driver if present.
 /// When a humanoid is connected, the stick figure is hidden automatically.
+/// If useStickFigureOnly is true, the stick figure is always shown (reliable fallback).
 /// </summary>
 public class PosePlaybackController : MonoBehaviour
 {
     [SerializeField] private PoseStickFigureRenderer poseRenderer;
     [SerializeField] private HumanoidPoseDriver humanoidDriver;
+    [Tooltip("When true, always show and drive the stick figure instead of the humanoid (reliable fallback).")]
+    [SerializeField] private bool useStickFigureOnly = false;
 
     public void SetRenderer(PoseStickFigureRenderer renderer) { poseRenderer = renderer; }
 
     public void SetHumanoidDriver(HumanoidPoseDriver driver)
     {
         humanoidDriver = driver;
-        if (humanoidDriver != null && poseRenderer != null)
+        if (humanoidDriver != null && poseRenderer != null && !useStickFigureOnly)
             poseRenderer.SetVisible(false);
+    }
+
+    public void SetUseStickFigureOnly(bool value)
+    {
+        useStickFigureOnly = value;
+        if (poseRenderer != null && humanoidDriver != null)
+        {
+            if (useStickFigureOnly)
+                poseRenderer.SetVisible(true);
+            else
+                poseRenderer.SetVisible(false);
+        }
     }
 
     private List<PoseFrame> _frames = new List<PoseFrame>();
@@ -102,14 +117,17 @@ public class PosePlaybackController : MonoBehaviour
         int idx = Mathf.Clamp(_currentFrameIndex, 0, _frames.Count - 1);
         var landmarks = _frames[idx].Landmarks;
 
-        bool hasHumanoid = humanoidDriver != null;
+        bool hasHumanoid = humanoidDriver != null && !useStickFigureOnly;
 
         if (poseRenderer != null)
         {
             if (hasHumanoid)
                 poseRenderer.SetVisible(false);
             else
+            {
+                poseRenderer.SetVisible(true);
                 poseRenderer.UpdateFrame(landmarks);
+            }
         }
 
         if (hasHumanoid)

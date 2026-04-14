@@ -47,8 +47,23 @@ public class FlutterUnityBridge : MonoBehaviour
         {
             posePlaybackController.SetHumanoidDriver(humanoid);
             Debug.Log($"[FlutterUnityBridge] Found humanoid rig: {humanoid.gameObject.name}");
+
+            // Ensure a PoseDebugMenuSimple exists so debug controls are always available in the embedded scene.
+            var debugMenu = humanoid.GetComponent<PoseDebugMenuSimple>();
+            if (debugMenu == null)
+            {
+                debugMenu = humanoid.gameObject.AddComponent<PoseDebugMenuSimple>();
+                // StartVisible = true so the window is shown on first load; user can hide it via the bottom bar.
+                var startVisibleField = typeof(PoseDebugMenuSimple).GetField("startVisible", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if (startVisibleField != null) startVisibleField.SetValue(debugMenu, true);
+            }
         }
+        if (preferStickFigureOnly && posePlaybackController != null)
+            posePlaybackController.SetUseStickFigureOnly(true);
     }
+
+    [Tooltip("When true, always show stick figure instead of humanoid (reliable fallback if humanoid deforms).")]
+    [SerializeField] private bool preferStickFigureOnly = false;
 
     private OrbitCameraController EnsureOrbitController()
     {
@@ -89,7 +104,7 @@ public class FlutterUnityBridge : MonoBehaviour
         var humanoid = GetHumanoidDriver();
         if (humanoid != null && humanoid.FigureHeight > 0.1f)
         {
-            _orbitController.UpdateTarget(humanoid.FigureCenter);
+            _orbitController.UpdateTarget(humanoid.HipsWorldPosition);
             return;
         }
 
@@ -126,6 +141,8 @@ public class FlutterUnityBridge : MonoBehaviour
         EnsurePosePlayback();
         if (posePlaybackController != null)
         {
+            if (preferStickFigureOnly)
+                posePlaybackController.SetUseStickFigureOnly(true);
             posePlaybackController.LoadFrames(payload.Frames, payload.Fps, payload.Loop);
             Debug.Log($"[FlutterUnityBridge] LoadPoseFrames: {payload.Frames?.Count ?? 0} frames, fps={payload.Fps}, loop={payload.Loop}");
             FrameCameraToFigure();
@@ -171,7 +188,7 @@ public class FlutterUnityBridge : MonoBehaviour
         var humanoid = GetHumanoidDriver();
         if (humanoid != null && humanoid.FigureHeight > 0.1f)
         {
-            center = humanoid.FigureCenter;
+            center = humanoid.HipsWorldPosition;
             height = humanoid.FigureHeight;
         }
         else
@@ -230,7 +247,7 @@ public class FlutterUnityBridge : MonoBehaviour
 
     private HumanoidPoseDriver GetHumanoidDriver()
     {
-        if (posePlaybackController == null) return null;
+        if (posePlaybackController == null || preferStickFigureOnly) return null;
         return FindAnyObjectByType<HumanoidPoseDriver>();
     }
 

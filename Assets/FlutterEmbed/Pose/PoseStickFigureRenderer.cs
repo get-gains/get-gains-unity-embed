@@ -3,13 +3,24 @@ using UnityEngine;
 
 /// <summary>
 /// Renders pose as a 3D mannequin figure: capsule limbs + sphere joints with body-part coloring.
-/// Coordinates: Flutter sends normalized x,y (0-1) and raw pixel z (NOT normalized).
-/// We map x,y to Unity XY plane and ignore z for correct rendering.
+/// Coordinates: Flutter sends normalized x,y (0-1) and z (depth). We map to Unity 3D using scale and depthScale
+/// so the stick figure matches HumanoidPoseDriver space.
 /// </summary>
 public class PoseStickFigureRenderer : MonoBehaviour
 {
     [Header("Scale and position")]
     [SerializeField] private float scale = 5f;
+    [Tooltip("Scale for landmark Z (depth). Match HumanoidPoseDriver.poseDepthScale for alignment.")]
+    [SerializeField] private float depthScale = 5f;
+    [Tooltip("Invert X to match 2D raw vertices (must match HumanoidPoseDriver.invertLandmarkX).")]
+    [SerializeField] private bool invertLandmarkX = true;
+    [Tooltip("Invert Z so front (MLKit negative Z) = Unity +Z; must match HumanoidPoseDriver.invertLandmarkZ. Default false to use MLKit Z as-is.")]
+    [SerializeField] private bool invertLandmarkZ = false;
+    [Tooltip("Z from MLKit is not 0-1; divide by this before scaling (match HumanoidPoseDriver.zNormalizeScale).")]
+    [SerializeField] private float zNormalizeScale = 100f;
+    [Tooltip("Clamp raw X,Y to this range (match HumanoidPoseDriver.xyClampMin/Max).")]
+    [SerializeField] private float xyClampMin = -0.2f;
+    [SerializeField] private float xyClampMax = 1.2f;
     [SerializeField] private Vector3 centerOffset = Vector3.zero;
 
     [Header("Visuals")]
@@ -23,6 +34,8 @@ public class PoseStickFigureRenderer : MonoBehaviour
     {
         ("LEFT_EAR", "LEFT_EYE", BodyPart.Head),
         ("RIGHT_EAR", "RIGHT_EYE", BodyPart.Head),
+        ("LEFT_EAR", "NOSE", BodyPart.Head),
+        ("RIGHT_EAR", "NOSE", BodyPart.Head),
         ("LEFT_EYE", "NOSE", BodyPart.Head),
         ("RIGHT_EYE", "NOSE", BodyPart.Head),
         ("LEFT_SHOULDER", "RIGHT_SHOULDER", BodyPart.Torso),
@@ -161,9 +174,14 @@ public class PoseStickFigureRenderer : MonoBehaviour
         }
     }
 
+    private static bool IsValidFloat(float f)
+    {
+        return !float.IsNaN(f) && !float.IsInfinity(f);
+    }
+
     /// <summary>
     /// Update skeleton to match one frame of landmarks.
-    /// x,y are normalized 0-1 from Flutter; z is raw pixels and is IGNORED.
+    /// Uses same coordinate and Z handling as HumanoidPoseDriver so stick figure and humanoid align.
     /// </summary>
     public void UpdateFrame(Dictionary<string, LandmarkPoint> landmarks)
     {
@@ -174,16 +192,28 @@ public class PoseStickFigureRenderer : MonoBehaviour
 
         var positions = new Dictionary<string, Vector3>();
         float minY = float.MaxValue, maxY = float.MinValue;
-        float sumX = 0, sumY = 0;
+        float sumX = 0, sumY = 0, sumZ = 0;
         int count = 0;
+        float zScale = Mathf.Max(0.001f, zNormalizeScale);
 
         foreach (var kvp in landmarks)
         {
-            float x = (float)(kvp.Value.X - 0.5);
-            float y = (float)(1.0 - kvp.Value.Y - 0.5);
-            Vector3 pos = centerOffset + scale * new Vector3(x, y, 0f);
+            float rawX = (float)kvp.Value.X;
+            float rawY = (float)kvp.Value.Y;
+            float rawZ = (float)kvp.Value.Z;
+            if (!IsValidFloat(rawX)) rawX = 0.5f;
+            if (!IsValidFloat(rawY)) rawY = 0.5f;
+            if (!IsValidFloat(rawZ)) rawZ = 0f;
+            rawX = Mathf.Clamp(rawX, xyClampMin, xyClampMax);
+            rawY = Mathf.Clamp(rawY, xyClampMin, xyClampMax);
+            rawZ = Mathf.Clamp(rawZ / zScale, -1f, 1f);
+
+            float x = (invertLandmarkX ? (0.5f - rawX) : (rawX - 0.5f)) * scale;
+            float y = (0.5f - rawY) * scale;
+            float z = (invertLandmarkZ ? -rawZ : rawZ) * depthScale;
+            Vector3 pos = centerOffset + new Vector3(x, y, z);
             positions[kvp.Key] = pos;
-            sumX += pos.x; sumY += pos.y;
+            sumX += pos.x; sumY += pos.y; sumZ += pos.z;
             if (pos.y < minY) minY = pos.y;
             if (pos.y > maxY) maxY = pos.y;
             count++;
@@ -191,7 +221,7 @@ public class PoseStickFigureRenderer : MonoBehaviour
 
         if (count > 0)
         {
-            _figureCenter = new Vector3(sumX / count, sumY / count, 0f);
+            _figureCenter = new Vector3(sumX / count, sumY / count, sumZ / count);
             _figureHeight = Mathf.Max(maxY - minY, 0.5f);
         }
 
