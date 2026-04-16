@@ -41,8 +41,7 @@ public class FlutterUnityBridge : MonoBehaviour
         posePlaybackController = poseGo.AddComponent<PosePlaybackController>();
         posePlaybackController.SetRenderer(renderer);
 
-        // Look for a HumanoidPoseDriver anywhere in the scene (e.g. on the Mannequin rig root).
-        var humanoid = FindAnyObjectByType<HumanoidPoseDriver>();
+        var humanoid = HumanoidPoseDriver.FindBestDriveableDriver();
         if (humanoid != null)
         {
             posePlaybackController.SetHumanoidDriver(humanoid);
@@ -141,6 +140,7 @@ public class FlutterUnityBridge : MonoBehaviour
         EnsurePosePlayback();
         if (posePlaybackController != null)
         {
+            posePlaybackController.ResolveHumanoidDriver();
             if (preferStickFigureOnly)
                 posePlaybackController.SetUseStickFigureOnly(true);
             posePlaybackController.LoadFrames(payload.Frames, payload.Fps, payload.Loop);
@@ -178,6 +178,26 @@ public class FlutterUnityBridge : MonoBehaviour
             orbit.SetAnglePreset(message);
         else if (poseCamera != null)
             ApplyCameraAngleDirect(message);
+    }
+
+    /// <summary>
+    /// Debug / tuning for pose retargeting. Message: JSON from Flutter, e.g.
+    /// {"swapArmLandmarks":true,"forceShowStickFigure":true}
+    /// </summary>
+    public void SetPoseDebugOptions(string message)
+    {
+        EnsurePosePlayback();
+        if (posePlaybackController == null) return;
+
+        var json = string.IsNullOrWhiteSpace(message) ? "{}" : message.Trim();
+        var opts = JsonUtility.FromJson<PoseDebugOptionsJson>(json);
+        posePlaybackController.ResolveHumanoidDriver();
+        var humanoid = posePlaybackController.ActiveHumanoidDriver;
+        if (humanoid != null)
+            humanoid.SetDebugSwapArmLandmarks(opts.swapArmLandmarks);
+        posePlaybackController.SetDebugForceStickFigure(opts.forceShowStickFigure);
+        Debug.Log(
+            $"[FlutterUnityBridge] SetPoseDebugOptions swapArmLandmarks={opts.swapArmLandmarks} forceShowStickFigure={opts.forceShowStickFigure}");
     }
 
     private void FrameCameraToFigure()
@@ -248,7 +268,8 @@ public class FlutterUnityBridge : MonoBehaviour
     private HumanoidPoseDriver GetHumanoidDriver()
     {
         if (posePlaybackController == null || preferStickFigureOnly) return null;
-        return FindAnyObjectByType<HumanoidPoseDriver>();
+        posePlaybackController.ResolveHumanoidDriver();
+        return posePlaybackController.ActiveHumanoidDriver;
     }
 
     // ── Cosmetics ──
@@ -328,4 +349,11 @@ public class FlutterUnityBridge : MonoBehaviour
         yield return null;
         SendToFlutter.Send("scene_loaded");
     }
+}
+
+[System.Serializable]
+public class PoseDebugOptionsJson
+{
+    public bool swapArmLandmarks;
+    public bool forceShowStickFigure;
 }
