@@ -3,14 +3,29 @@ using UnityEngine;
 
 /// <summary>
 /// Renders pose as a 3D mannequin figure: capsule limbs + sphere joints with body-part coloring.
-/// Coordinates: Flutter sends normalized x,y (0-1) and raw pixel z (NOT normalized).
-/// We map x,y to Unity XY plane and ignore z for correct rendering.
+/// Coordinates: Flutter sends normalized x,y (0-1) and raw ML Kit Z (depth).
+/// X/Y map to figure space with scale; Z depth multiplier matches HumanoidPoseDriver (XY-relative auto scale).
 /// </summary>
 public class PoseStickFigureRenderer : MonoBehaviour
 {
     [Header("Scale and position")]
     [SerializeField] private float scale = 5f;
     [SerializeField] private Vector3 centerOffset = Vector3.zero;
+
+    [Header("Depth")]
+    [Tooltip("Match HumanoidPoseDriver.zSpanFloor.")]
+    [SerializeField] private float zSpanFloor = 0.03f;
+    [Tooltip("Match HumanoidPoseDriver.zMultiplierCap.")]
+    [SerializeField] private float zMultiplierCap = 60f;
+    [SerializeField] private bool invertDepthAxis;
+
+    [Header("Head")]
+    [Tooltip("Match HumanoidPoseDriver.headReachScale.")]
+    [SerializeField] private float headReachScale = 0.65f;
+    [Tooltip("Match HumanoidPoseDriver.headDepthScale.")]
+    [SerializeField] private float headDepthScale = 0.55f;
+    [Tooltip("Match HumanoidPoseDriver.headForwardSmoothAlpha.")]
+    [SerializeField] private float headForwardSmoothAlpha = 0.22f;
 
     [Header("Visuals")]
     [SerializeField] private float jointRadius = 0.045f;
@@ -55,9 +70,22 @@ public class PoseStickFigureRenderer : MonoBehaviour
     private Vector3 _figureCenter;
     private float _figureHeight = 1f;
     private Color _baseColor = Color.cyan;
+    private bool _debugInvertArmDepthZ;
+    private bool _debugInvertHeadDepthZ;
+    private Vector3 _headForwardSmoothed;
 
     public Vector3 FigureCenter => _figureCenter;
     public float FigureHeight => _figureHeight;
+
+    public void SetDebugInvertArmDepthZ(bool value)
+    {
+        _debugInvertArmDepthZ = value;
+    }
+
+    public void SetDebugInvertHeadDepthZ(bool value)
+    {
+        _debugInvertHeadDepthZ = value;
+    }
 
     private void Awake()
     {
@@ -162,8 +190,7 @@ public class PoseStickFigureRenderer : MonoBehaviour
     }
 
     /// <summary>
-    /// Update skeleton to match one frame of landmarks.
-    /// x,y are normalized 0-1 from Flutter; z is raw pixels and is IGNORED.
+    /// Update skeleton to match one frame of landmarks (normalized x/y, raw Z depth).
     /// </summary>
     public void UpdateFrame(Dictionary<string, LandmarkPoint> landmarks)
     {
@@ -174,16 +201,39 @@ public class PoseStickFigureRenderer : MonoBehaviour
 
         var positions = new Dictionary<string, Vector3>();
         float minY = float.MaxValue, maxY = float.MinValue;
-        float sumX = 0, sumY = 0;
+        float sumX = 0, sumY = 0, sumZ = 0;
         int count = 0;
 
+        double zRef = PoseLandmarkMapping.ComputeZReference(landmarks);
+        float zMult = PoseLandmarkMapping.ComputeDepthMultiplier(
+            landmarks, scale, zRef, zSpanFloor, zMultiplierCap);
         foreach (var kvp in landmarks)
         {
-            float x = (float)(kvp.Value.X - 0.5);
-            float y = (float)(1.0 - kvp.Value.Y - 0.5);
-            Vector3 pos = centerOffset + scale * new Vector3(x, y, 0f);
+            Vector3 pos = PoseLandmarkMapping.ToWorldPosition(
+                kvp.Value,
+                scale,
+                zMult,
+                invertDepthAxis,
+                zRef,
+                centerOffset);
             positions[kvp.Key] = pos;
-            sumX += pos.x; sumY += pos.y;
+        }
+
+        PoseLandmarkMapping.ApplyHeadClusterBlend(positions, headReachScale, headDepthScale);
+        PoseLandmarkMapping.ApplyInvertArmWorldZ(positions, _debugInvertArmDepthZ);
+        PoseLandmarkMapping.ApplyHeadStraightAheadNearShoulder(
+            positions,
+            scale,
+            ref _headForwardSmoothed,
+            headForwardSmoothAlpha);
+        PoseLandmarkMapping.ApplyInvertHeadWorldZ(positions, _debugInvertHeadDepthZ);
+
+        foreach (var kvp in positions)
+        {
+            Vector3 pos = kvp.Value;
+            sumX += pos.x;
+            sumY += pos.y;
+            sumZ += pos.z;
             if (pos.y < minY) minY = pos.y;
             if (pos.y > maxY) maxY = pos.y;
             count++;
@@ -191,7 +241,7 @@ public class PoseStickFigureRenderer : MonoBehaviour
 
         if (count > 0)
         {
-            _figureCenter = new Vector3(sumX / count, sumY / count, 0f);
+            _figureCenter = new Vector3(sumX / count, sumY / count, sumZ / count);
             _figureHeight = Mathf.Max(maxY - minY, 0.5f);
         }
 

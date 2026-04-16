@@ -165,7 +165,7 @@ public class FlutterUnityBridge : MonoBehaviour
 
     /// <summary>
     /// Debug / tuning for pose retargeting. Message: JSON from Flutter, e.g.
-    /// {"swapArmLandmarks":true,"forceShowStickFigure":true}
+    /// {"swapArmLandmarks":true,"forceShowStickFigure":true,"invertArmDepthZ":false,"invertHeadDepthZ":true}
     /// </summary>
     public void SetPoseDebugOptions(string message)
     {
@@ -179,8 +179,10 @@ public class FlutterUnityBridge : MonoBehaviour
         if (humanoid != null)
             humanoid.SetDebugSwapArmLandmarks(opts.swapArmLandmarks);
         posePlaybackController.SetDebugForceStickFigure(opts.forceShowStickFigure);
+        posePlaybackController.SetDebugInvertArmDepthZ(opts.invertArmDepthZ);
+        posePlaybackController.SetDebugInvertHeadDepthZ(opts.invertHeadDepthZ);
         Debug.Log(
-            $"[FlutterUnityBridge] SetPoseDebugOptions swapArmLandmarks={opts.swapArmLandmarks} forceShowStickFigure={opts.forceShowStickFigure}");
+            $"[FlutterUnityBridge] SetPoseDebugOptions swapArmLandmarks={opts.swapArmLandmarks} forceShowStickFigure={opts.forceShowStickFigure} invertArmDepthZ={opts.invertArmDepthZ} invertHeadDepthZ={opts.invertHeadDepthZ}");
     }
 
     private void FrameCameraToFigure()
@@ -339,4 +341,6 @@ public class PoseDebugOptionsJson
 {
     public bool swapArmLandmarks;
     public bool forceShowStickFigure;
+    public bool invertArmDepthZ;
+    public bool invertHeadDepthZ;
 }
