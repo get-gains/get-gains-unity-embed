@@ -3,8 +3,8 @@ using UnityEngine;
 
 /// <summary>
 /// Renders pose as a 3D mannequin figure: capsule limbs + sphere joints with body-part coloring.
-/// Coordinates: Flutter sends normalized x,y (0-1) and z (depth). We map to Unity 3D using scale and depthScale
-/// so the stick figure matches HumanoidPoseDriver space.
+/// Flutter sends normalized x,y (0–1) and raw ML Kit Z (depth). X/Y map with scale; Z uses the same
+/// PoseLandmarkMapping depth multiplier as HumanoidPoseDriver so the stick figure and humanoid align.
 /// </summary>
 public class PoseStickFigureRenderer : MonoBehaviour
 {
@@ -22,6 +22,21 @@ public class PoseStickFigureRenderer : MonoBehaviour
     [SerializeField] private float xyClampMin = -0.2f;
     [SerializeField] private float xyClampMax = 1.2f;
     [SerializeField] private Vector3 centerOffset = Vector3.zero;
+
+    [Header("Depth")]
+    [Tooltip("Match HumanoidPoseDriver.zSpanFloor.")]
+    [SerializeField] private float zSpanFloor = 0.03f;
+    [Tooltip("Match HumanoidPoseDriver.zMultiplierCap.")]
+    [SerializeField] private float zMultiplierCap = 60f;
+    [SerializeField] private bool invertDepthAxis;
+
+    [Header("Head")]
+    [Tooltip("Match HumanoidPoseDriver.headReachScale.")]
+    [SerializeField] private float headReachScale = 0.65f;
+    [Tooltip("Match HumanoidPoseDriver.headDepthScale.")]
+    [SerializeField] private float headDepthScale = 0.55f;
+    [Tooltip("Match HumanoidPoseDriver.headForwardSmoothAlpha.")]
+    [SerializeField] private float headForwardSmoothAlpha = 0.22f;
 
     [Header("Visuals")]
     [SerializeField] private float jointRadius = 0.045f;
@@ -68,9 +83,22 @@ public class PoseStickFigureRenderer : MonoBehaviour
     private Vector3 _figureCenter;
     private float _figureHeight = 1f;
     private Color _baseColor = Color.cyan;
+    private bool _debugInvertArmDepthZ;
+    private bool _debugInvertHeadDepthZ;
+    private Vector3 _headForwardSmoothed;
 
     public Vector3 FigureCenter => _figureCenter;
     public float FigureHeight => _figureHeight;
+
+    public void SetDebugInvertArmDepthZ(bool value)
+    {
+        _debugInvertArmDepthZ = value;
+    }
+
+    public void SetDebugInvertHeadDepthZ(bool value)
+    {
+        _debugInvertHeadDepthZ = value;
+    }
 
     private void Awake()
     {
@@ -174,14 +202,8 @@ public class PoseStickFigureRenderer : MonoBehaviour
         }
     }
 
-    private static bool IsValidFloat(float f)
-    {
-        return !float.IsNaN(f) && !float.IsInfinity(f);
-    }
-
     /// <summary>
-    /// Update skeleton to match one frame of landmarks.
-    /// Uses same coordinate and Z handling as HumanoidPoseDriver so stick figure and humanoid align.
+    /// Update skeleton to match one frame of landmarks using PoseLandmarkMapping (same as HumanoidPoseDriver).
     /// </summary>
     public void UpdateFrame(Dictionary<string, LandmarkPoint> landmarks)
     {
@@ -194,26 +216,37 @@ public class PoseStickFigureRenderer : MonoBehaviour
         float minY = float.MaxValue, maxY = float.MinValue;
         float sumX = 0, sumY = 0, sumZ = 0;
         int count = 0;
-        float zScale = Mathf.Max(0.001f, zNormalizeScale);
 
+        double zRef = PoseLandmarkMapping.ComputeZReference(landmarks);
+        float zMult = PoseLandmarkMapping.ComputeDepthMultiplier(
+            landmarks, scale, zRef, zSpanFloor, zMultiplierCap);
         foreach (var kvp in landmarks)
         {
-            float rawX = (float)kvp.Value.X;
-            float rawY = (float)kvp.Value.Y;
-            float rawZ = (float)kvp.Value.Z;
-            if (!IsValidFloat(rawX)) rawX = 0.5f;
-            if (!IsValidFloat(rawY)) rawY = 0.5f;
-            if (!IsValidFloat(rawZ)) rawZ = 0f;
-            rawX = Mathf.Clamp(rawX, xyClampMin, xyClampMax);
-            rawY = Mathf.Clamp(rawY, xyClampMin, xyClampMax);
-            rawZ = Mathf.Clamp(rawZ / zScale, -1f, 1f);
-
-            float x = (invertLandmarkX ? (0.5f - rawX) : (rawX - 0.5f)) * scale;
-            float y = (0.5f - rawY) * scale;
-            float z = (invertLandmarkZ ? -rawZ : rawZ) * depthScale;
-            Vector3 pos = centerOffset + new Vector3(x, y, z);
+            Vector3 pos = PoseLandmarkMapping.ToWorldPosition(
+                kvp.Value,
+                scale,
+                zMult,
+                invertDepthAxis,
+                zRef,
+                centerOffset);
             positions[kvp.Key] = pos;
-            sumX += pos.x; sumY += pos.y; sumZ += pos.z;
+        }
+
+        PoseLandmarkMapping.ApplyHeadClusterBlend(positions, headReachScale, headDepthScale);
+        PoseLandmarkMapping.ApplyInvertArmWorldZ(positions, _debugInvertArmDepthZ);
+        PoseLandmarkMapping.ApplyHeadStraightAheadNearShoulder(
+            positions,
+            scale,
+            ref _headForwardSmoothed,
+            headForwardSmoothAlpha);
+        PoseLandmarkMapping.ApplyInvertHeadWorldZ(positions, _debugInvertHeadDepthZ);
+
+        foreach (var kvp in positions)
+        {
+            Vector3 pos = kvp.Value;
+            sumX += pos.x;
+            sumY += pos.y;
+            sumZ += pos.z;
             if (pos.y < minY) minY = pos.y;
             if (pos.y > maxY) maxY = pos.y;
             count++;

@@ -8,11 +8,9 @@ using UnityEngine;
 /// - ganeshsar/UnityPythonMediaPipeAvatar: reference pose (bind) + delta rotation, spine dampening (0.25), Tick smoothing.
 /// - BrandonBartram98/MediaPipe-UnitySolver: per-bone dampener and Slerp(rotation, target, lerpAmount).
 ///
-/// Strategy:
-/// 1. At Start(), store each bone's bind-pose world rotation and bind direction (reference).
-/// 2. Each frame: compute target direction from landmarks; rotation = FromToRotation(bindDir, targetDir) * bindWorldRot.
-/// 3. Apply per-bone blend (spine/hips softer) and temporal Slerp so motion is stable, not jittery.
-/// 4. No per-frame reset to bind — we always target from the same reference, avoiding drift and nonsense poses.
+/// Strategy: rotation-only on bones + root scale for proportions. Landmarks map through PoseLandmarkMapping
+/// (XY-relative depth multiplier) so Z tracks body depth without stretching the figure. Bones align to mapped
+/// directions root-to-leaf; root height scale uses Y span only.
 /// </summary>
 public class HumanoidPoseDriver : MonoBehaviour
 {
@@ -105,10 +103,35 @@ public class HumanoidPoseDriver : MonoBehaviour
     [Tooltip("If set, used as the bone that should carry face + back-of-head (e.g. DEF-spine.004). Required when Unity strips DEF bones from the optimized hierarchy.")]
     [SerializeField] private Transform spineFaceAnchorOverride;
 
+    [Header("Depth")]
+    [Tooltip("Minimum hip-relative raw Z span when computing depth multiplier (avoids divide-by-near-zero).")]
+    [SerializeField] private float zSpanFloor = 0.03f;
+    [Tooltip("Maximum depth multiplier per frame (caps noise when raw Z span is tiny).")]
+    [SerializeField] private float zMultiplierCap = 60f;
+    [SerializeField] private bool invertDepthAxis;
+
+    [Header("Head")]
+    [Tooltip("Scales offset from MID_SHOULDER toward NOSE/EYE/EAR (lower = less head tilt).")]
+    [SerializeField] private float headReachScale = 0.65f;
+    [Tooltip("Extra dampening on Z component of head offset after radial scale.")]
+    [SerializeField] private float headDepthScale = 0.55f;
+    [Tooltip("Slerp each frame toward measured head-forward (higher = snappier). Side views need ~0.18–0.28.")]
+    [SerializeField] private float headForwardSmoothAlpha = 0.22f;
+    [Tooltip("Synthetic neck point along shoulder→nose (0–1). Splits neck vs head rotation so the mesh can match landmarks.")]
+    [Range(0.12f, 0.72f)]
+    [SerializeField] private float virtualNeckAlongShoulderToNose = 0.38f;
+
+    // (Bone, HierarchyChild for bind direction, FromLandmark, ToLandmark)
+    // Root-to-leaf order so parent rotations apply before children.
     private static readonly (HumanBodyBones Bone, HumanBodyBones Child, string From, string To)[] BoneMap =
     {
         (HumanBodyBones.Hips,           HumanBodyBones.Spine,          "MID_HIP",       "MID_SHOULDER"),
-        (HumanBodyBones.Neck,           HumanBodyBones.Head,           "MID_SHOULDER",  "HEAD_CENTER"),
+        (HumanBodyBones.Spine,          HumanBodyBones.Chest,          "MID_HIP",       "MID_SHOULDER"),
+        (HumanBodyBones.Chest,          HumanBodyBones.UpperChest,     "MID_HIP",       "MID_SHOULDER"),
+        (HumanBodyBones.UpperChest,     HumanBodyBones.Neck,           "MID_HIP",       "MID_SHOULDER"),
+        // Neck takes shoulder→virtual neck; Head takes virtual neck→nose (Head was never rotated before).
+        (HumanBodyBones.Neck,           HumanBodyBones.Head,           "MID_SHOULDER",  "NECK_VIRTUAL"),
+        (HumanBodyBones.Head,           HumanBodyBones.Jaw,            "NECK_VIRTUAL",   "NOSE"),
 
         (HumanBodyBones.LeftUpperArm,   HumanBodyBones.LeftLowerArm,   "LEFT_SHOULDER", "LEFT_ELBOW"),
         (HumanBodyBones.LeftLowerArm,   HumanBodyBones.LeftHand,       "LEFT_ELBOW",    "LEFT_WRIST"),
@@ -166,6 +189,14 @@ public class HumanoidPoseDriver : MonoBehaviour
     /// <summary>If true, LEFT_* / RIGHT_* arm landmark positions are swapped before retargeting (mirrored rig vs camera).</summary>
     private bool _debugSwapArmLandmarks;
 
+    /// <summary>If true, negate world Z on arm landmarks after mapping (debug).</summary>
+    private bool _debugInvertArmDepthZ;
+
+    /// <summary>If true, negate world Z on head cluster after head straightening (debug).</summary>
+    private bool _debugInvertHeadDepthZ;
+
+    private Vector3 _headForwardSmoothed;
+
     private Vector3 _figureCenter;
     private float _figureHeight = 1f;
     private Vector3 _targetRootPosition;
@@ -188,6 +219,16 @@ public class HumanoidPoseDriver : MonoBehaviour
     public void SetDebugSwapArmLandmarks(bool value)
     {
         _debugSwapArmLandmarks = value;
+    }
+
+    public void SetDebugInvertArmDepthZ(bool value)
+    {
+        _debugInvertArmDepthZ = value;
+    }
+
+    public void SetDebugInvertHeadDepthZ(bool value)
+    {
+        _debugInvertHeadDepthZ = value;
     }
 
     /// <summary>First active driveable HumanoidPoseDriver in loaded scenes, or null.</summary>
@@ -448,26 +489,18 @@ public class HumanoidPoseDriver : MonoBehaviour
     {
         _pos.Clear();
         _confidence.Clear();
-        float zScale = Mathf.Max(0.001f, zNormalizeScale);
-
+        double zRef = PoseLandmarkMapping.ComputeZReference(landmarks);
+        float zMult = PoseLandmarkMapping.ComputeDepthMultiplier(
+            landmarks, poseScale, zRef, zSpanFloor, zMultiplierCap);
         foreach (var kvp in landmarks)
         {
-            float rawX = (float)kvp.Value.X;
-            float rawY = (float)kvp.Value.Y;
-            float rawZ = (float)kvp.Value.Z;
-
-            if (!IsValidFloat(rawX)) rawX = 0.5f;
-            if (!IsValidFloat(rawY)) rawY = 0.5f;
-            if (!IsValidFloat(rawZ)) rawZ = 0f;
-            rawX = Mathf.Clamp(rawX, xyClampMin, xyClampMax);
-            rawY = Mathf.Clamp(rawY, xyClampMin, xyClampMax);
-            rawZ = Mathf.Clamp(rawZ / zScale, -1f, 1f);
-
-            float x = (invertLandmarkX ? (0.5f - rawX) : (rawX - 0.5f)) * poseScale;
-            float y = (0.5f - rawY) * poseScale;
-            float z = (invertLandmarkZ ? -rawZ : rawZ) * poseDepthScale;
-
-            _pos[kvp.Key] = new Vector3(x, y, z);
+            _pos[kvp.Key] = PoseLandmarkMapping.ToWorldPosition(
+                kvp.Value,
+                poseScale,
+                zMult,
+                invertDepthAxis,
+                zRef,
+                Vector3.zero);
             _confidence[kvp.Key] = Mathf.Clamp01((float)kvp.Value.Confidence);
         }
 
@@ -487,8 +520,48 @@ public class HumanoidPoseDriver : MonoBehaviour
             _confidence["HEAD_CENTER"] = 1f;
         }
 
+        PoseLandmarkMapping.ApplyHeadClusterBlend(_pos, headReachScale, headDepthScale);
         if (_debugSwapArmLandmarks)
             ApplyDebugArmLandmarkSwap();
+        PoseLandmarkMapping.ApplyInvertArmWorldZ(_pos, _debugInvertArmDepthZ);
+        // After shoulders/depth are final so torso "forward" matches retargeting debug.
+        PoseLandmarkMapping.ApplyHeadStraightAheadNearShoulder(
+            _pos,
+            poseScale,
+            ref _headForwardSmoothed,
+            headForwardSmoothAlpha);
+        PoseLandmarkMapping.ApplyInvertHeadWorldZ(_pos, _debugInvertHeadDepthZ);
+        ApplyVirtualNeckLandmark();
+    }
+
+    /// <summary>
+    /// Inserts NECK_VIRTUAL between MID_SHOULDER and NOSE so Neck and Head bones each get a rotation
+    /// (previously only Neck rotated toward NOSE and Head stayed bind-pose, which skewed the mesh vs landmarks).
+    /// </summary>
+    private void ApplyVirtualNeckLandmark()
+    {
+        Vector3 mid;
+        if (!_pos.TryGetValue("MID_SHOULDER", out mid))
+        {
+            if (_pos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) &&
+                _pos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs))
+                mid = 0.5f * (ls + rs);
+            else
+                return;
+        }
+
+        if (!_pos.TryGetValue("NOSE", out Vector3 nose))
+            return;
+
+        Vector3 delta = nose - mid;
+        if (delta.sqrMagnitude < 1e-10f)
+        {
+            _pos["NECK_VIRTUAL"] = mid + Vector3.up * Mathf.Max(0.01f, poseScale * 0.02f);
+            return;
+        }
+
+        float t = Mathf.Clamp01(virtualNeckAlongShoulderToNose);
+        _pos["NECK_VIRTUAL"] = mid + delta * t;
     }
 
     private void CacheTorsoChain()
@@ -914,11 +987,6 @@ public class HumanoidPoseDriver : MonoBehaviour
         return Mathf.Lerp(0.35f, 1f, fallbackT);
     }
 
-    private static bool IsValidFloat(float f)
-    {
-        return !float.IsNaN(f) && !float.IsInfinity(f);
-    }
-
     private static void SwapPos(Dictionary<string, Vector3> pos, string a, string b)
     {
         if (!pos.TryGetValue(a, out Vector3 va) || !pos.TryGetValue(b, out Vector3 vb)) return;
@@ -942,8 +1010,10 @@ public class HumanoidPoseDriver : MonoBehaviour
         int count = 0;
         foreach (var kvp in _pos)
         {
-            if (kvp.Key.StartsWith("MID_")) continue;
-            sumX += kvp.Value.x; sumY += kvp.Value.y; sumZ += kvp.Value.z;
+            if (kvp.Key.StartsWith("MID_") || kvp.Key == "NECK_VIRTUAL") continue;
+            sumX += kvp.Value.x;
+            sumY += kvp.Value.y;
+            sumZ += kvp.Value.z;
             if (kvp.Value.y < minY) minY = kvp.Value.y;
             if (kvp.Value.y > maxY) maxY = kvp.Value.y;
             count++;

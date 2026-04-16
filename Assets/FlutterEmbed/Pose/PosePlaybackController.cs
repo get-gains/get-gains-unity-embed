@@ -44,6 +44,11 @@ public class PosePlaybackController : MonoBehaviour
         if (humanoidDriver != null && humanoidDriver.IsDriveable)
             return;
         humanoidDriver = HumanoidPoseDriver.FindBestDriveableDriver();
+        if (humanoidDriver != null)
+        {
+            humanoidDriver.SetDebugInvertArmDepthZ(_debugInvertArmDepthZ);
+            humanoidDriver.SetDebugInvertHeadDepthZ(_debugInvertHeadDepthZ);
+        }
     }
 
     /// <summary>Currently resolved humanoid for orbit/camera; null if none driveable.</summary>
@@ -59,6 +64,10 @@ public class PosePlaybackController : MonoBehaviour
 
     /// <summary>When true, keep the cyan stick figure visible on top of the humanoid for comparison.</summary>
     private bool _debugForceStickFigure;
+
+    private bool _debugInvertArmDepthZ;
+
+    private bool _debugInvertHeadDepthZ;
 
     private void Awake()
     {
@@ -134,6 +143,24 @@ public class PosePlaybackController : MonoBehaviour
     public void SetDebugForceStickFigure(bool value)
     {
         _debugForceStickFigure = value;
+    }
+
+    public void SetDebugInvertArmDepthZ(bool value)
+    {
+        _debugInvertArmDepthZ = value;
+        if (humanoidDriver != null)
+            humanoidDriver.SetDebugInvertArmDepthZ(value);
+        if (poseRenderer != null)
+            poseRenderer.SetDebugInvertArmDepthZ(value);
+    }
+
+    public void SetDebugInvertHeadDepthZ(bool value)
+    {
+        _debugInvertHeadDepthZ = value;
+        if (humanoidDriver != null)
+            humanoidDriver.SetDebugInvertHeadDepthZ(value);
+        if (poseRenderer != null)
+            poseRenderer.SetDebugInvertHeadDepthZ(value);
     }
 
     private void UpdateRenderer()
