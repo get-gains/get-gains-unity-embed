@@ -5,7 +5,10 @@ using UnityEngine;
 /// Holds loaded pose frames and drives playback (current frame index, play/pause, seek).
 /// Updates both the stick figure renderer AND the humanoid pose driver if present.
 /// When a humanoid is connected, the stick figure is hidden automatically.
+/// Pose is applied in LateUpdate so bone rotations run after the Animator (otherwise a
+/// RuntimeAnimatorController would overwrite script-driven humanoid bones every frame).
 /// </summary>
+[DefaultExecutionOrder(1000)]
 public class PosePlaybackController : MonoBehaviour
 {
     [SerializeField] private PoseStickFigureRenderer poseRenderer;
@@ -16,9 +19,18 @@ public class PosePlaybackController : MonoBehaviour
     public void SetHumanoidDriver(HumanoidPoseDriver driver)
     {
         humanoidDriver = driver;
-        if (humanoidDriver != null && poseRenderer != null)
-            poseRenderer.SetVisible(false);
     }
+
+    /// <summary>Bind the first active driveable HumanoidPoseDriver in the scene (e.g. after swapping character prefab).</summary>
+    public void ResolveHumanoidDriver()
+    {
+        if (humanoidDriver != null && humanoidDriver.IsDriveable)
+            return;
+        humanoidDriver = HumanoidPoseDriver.FindBestDriveableDriver();
+    }
+
+    /// <summary>Currently resolved humanoid for orbit/camera; null if none driveable.</summary>
+    public HumanoidPoseDriver ActiveHumanoidDriver => humanoidDriver;
 
     private List<PoseFrame> _frames = new List<PoseFrame>();
     private int _currentFrameIndex;
@@ -28,12 +40,16 @@ public class PosePlaybackController : MonoBehaviour
     private bool _playing;
     private Color _skeletonColor = Color.cyan;
 
+    /// <summary>When true, keep the cyan stick figure visible on top of the humanoid for comparison.</summary>
+    private bool _debugForceStickFigure;
+
     private void Awake()
     {
         if (poseRenderer == null)
             poseRenderer = GetComponentInChildren<PoseStickFigureRenderer>();
         if (humanoidDriver == null)
             humanoidDriver = GetComponentInChildren<HumanoidPoseDriver>();
+        ResolveHumanoidDriver();
     }
 
     private void Update()
@@ -57,7 +73,11 @@ public class PosePlaybackController : MonoBehaviour
                 }
             }
         }
+    }
 
+    private void LateUpdate()
+    {
+        if (_frames == null || _frames.Count == 0) return;
         UpdateRenderer();
     }
 
@@ -69,7 +89,6 @@ public class PosePlaybackController : MonoBehaviour
         _currentFrameIndex = 0;
         _frameTime = 0f;
         _playing = false;
-        UpdateRenderer();
     }
 
     public void Play()
@@ -87,7 +106,6 @@ public class PosePlaybackController : MonoBehaviour
         if (_frames == null) return;
         _currentFrameIndex = Mathf.Clamp(index, 0, _frames.Count - 1);
         _frameTime = 0f;
-        UpdateRenderer();
     }
 
     public void SetSkeletonColor(Color color)
@@ -96,23 +114,32 @@ public class PosePlaybackController : MonoBehaviour
         if (poseRenderer != null) poseRenderer.SetColor(color);
     }
 
+    public void SetDebugForceStickFigure(bool value)
+    {
+        _debugForceStickFigure = value;
+    }
+
     private void UpdateRenderer()
     {
         if (_frames == null || _frames.Count == 0) return;
         int idx = Mathf.Clamp(_currentFrameIndex, 0, _frames.Count - 1);
         var landmarks = _frames[idx].Landmarks;
 
-        bool hasHumanoid = humanoidDriver != null;
+        ResolveHumanoidDriver();
+        if (humanoidDriver != null)
+            humanoidDriver.TryInitialize();
+
+        bool useHumanoid = humanoidDriver != null && humanoidDriver.IsDriveable;
 
         if (poseRenderer != null)
         {
-            if (hasHumanoid)
+            if (useHumanoid && !_debugForceStickFigure)
                 poseRenderer.SetVisible(false);
             else
                 poseRenderer.UpdateFrame(landmarks);
         }
 
-        if (hasHumanoid)
+        if (useHumanoid)
             humanoidDriver.ApplyPose(landmarks);
     }
 

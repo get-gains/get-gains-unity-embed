@@ -68,16 +68,82 @@ public class HumanoidPoseDriver : MonoBehaviour
     private readonly List<RuntimeBone> _bones = new List<RuntimeBone>();
     private readonly Dictionary<string, Vector3> _pos = new Dictionary<string, Vector3>();
     private bool _ready;
+    private bool _loggedHumanoidWarning;
+
+    /// <summary>If true, LEFT_* / RIGHT_* arm landmark positions are swapped before retargeting (mirrored rig vs camera).</summary>
+    private bool _debugSwapArmLandmarks;
 
     private Vector3 _figureCenter;
     private float _figureHeight = 1f;
     public Vector3 FigureCenter => _figureCenter;
     public float FigureHeight => _figureHeight;
 
+    /// <summary>True after a successful rig build (Humanoid avatar + mapped bones).</summary>
+    public bool IsDriveable => _ready;
+
+    public void SetDebugSwapArmLandmarks(bool value)
+    {
+        _debugSwapArmLandmarks = value;
+    }
+
+    /// <summary>First active driveable HumanoidPoseDriver in loaded scenes, or null.</summary>
+    public static HumanoidPoseDriver FindBestDriveableDriver()
+    {
+        var drivers = Object.FindObjectsByType<HumanoidPoseDriver>(FindObjectsInactive.Exclude);
+        foreach (var d in drivers)
+        {
+            if (d == null) continue;
+            d.TryInitialize();
+            if (d.IsDriveable) return d;
+        }
+        return null;
+    }
+
+    private void Awake()
+    {
+        TryInitialize();
+    }
+
     private void Start()
     {
+        // Flutter may send pose before Awake/Start on other objects; retry after full scene init.
+        TryInitialize();
+    }
+
+    /// <summary>
+    /// Builds bone cache when possible. Safe to call every frame; no-op when already ready.
+    /// Returns false if the Animator is missing, not Humanoid, or has no mappable bones.
+    /// </summary>
+    public bool TryInitialize()
+    {
+        if (_ready) return true;
+
         if (animator == null) animator = GetComponent<Animator>();
-        if (animator == null) { Debug.LogWarning("[HumanoidPoseDriver] No Animator."); return; }
+        if (animator == null) animator = GetComponentInChildren<Animator>(true);
+        if (animator == null) animator = GetComponentInParent<Animator>(true);
+        if (animator == null)
+        {
+            if (!_loggedHumanoidWarning)
+            {
+                Debug.LogWarning(
+                    "[HumanoidPoseDriver] No Animator on this GameObject, its children, or parents. "
+                    + "Add an Animator (Humanoid) or assign the Animator field.");
+                _loggedHumanoidWarning = true;
+            }
+            return false;
+        }
+
+        if (animator.avatar == null || !animator.avatar.isHuman)
+        {
+            if (!_loggedHumanoidWarning)
+            {
+                Debug.LogError(
+                    "[HumanoidPoseDriver] Avatar must be **Humanoid** (Rig tab in FBX import settings). "
+                    + "Generic rigs cannot use HumanBodyBones retargeting — the cyan stick figure will show instead.");
+                _loggedHumanoidWarning = true;
+            }
+            return false;
+        }
 
         _rootTransform = animator.transform;
         _hips = animator.GetBoneTransform(HumanBodyBones.Hips);
@@ -87,6 +153,7 @@ public class HumanoidPoseDriver : MonoBehaviour
         var head = animator.GetBoneTransform(HumanBodyBones.Head);
         var lFoot = animator.GetBoneTransform(HumanBodyBones.LeftFoot);
         var rFoot = animator.GetBoneTransform(HumanBodyBones.RightFoot);
+        _bindHeight = 0f;
         if (head != null)
         {
             float footY = float.MaxValue;
@@ -131,12 +198,22 @@ public class HumanoidPoseDriver : MonoBehaviour
         }
 
         _ready = _bones.Count > 0;
-        Debug.Log($"[HumanoidPoseDriver] Ready: {_bones.Count} bones, bindHeight={_bindHeight:F3}");
+        if (_ready)
+            Debug.Log($"[HumanoidPoseDriver] Ready: {_bones.Count} bones, bindHeight={_bindHeight:F3} on '{gameObject.name}'");
+        else if (!_loggedHumanoidWarning)
+        {
+            Debug.LogError(
+                "[HumanoidPoseDriver] No Humanoid bones mapped. Check Avatar Configuration (Mapping) for this model.");
+            _loggedHumanoidWarning = true;
+        }
+
+        return _ready;
     }
 
     public void ApplyPose(Dictionary<string, LandmarkPoint> landmarks)
     {
-        if (!_ready || landmarks == null || landmarks.Count == 0) return;
+        if (landmarks == null || landmarks.Count == 0) return;
+        if (!TryInitialize() || !_ready) return;
 
         BuildPositionCache(landmarks);
         ComputeFigureBounds();
@@ -193,6 +270,25 @@ public class HumanoidPoseDriver : MonoBehaviour
         // Synthetic midpoints
         if (_pos.TryGetValue("LEFT_HIP", out Vector3 lh) && _pos.TryGetValue("RIGHT_HIP", out Vector3 rh))
             _pos["MID_HIP"] = 0.5f * (lh + rh);
+        if (_pos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) && _pos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs))
+            _pos["MID_SHOULDER"] = 0.5f * (ls + rs);
+
+        if (_debugSwapArmLandmarks)
+            ApplyDebugArmLandmarkSwap();
+    }
+
+    private static void SwapPos(Dictionary<string, Vector3> pos, string a, string b)
+    {
+        if (!pos.TryGetValue(a, out Vector3 va) || !pos.TryGetValue(b, out Vector3 vb)) return;
+        pos[a] = vb;
+        pos[b] = va;
+    }
+
+    private void ApplyDebugArmLandmarkSwap()
+    {
+        SwapPos(_pos, "LEFT_SHOULDER", "RIGHT_SHOULDER");
+        SwapPos(_pos, "LEFT_ELBOW", "RIGHT_ELBOW");
+        SwapPos(_pos, "LEFT_WRIST", "RIGHT_WRIST");
         if (_pos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) && _pos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs))
             _pos["MID_SHOULDER"] = 0.5f * (ls + rs);
     }
