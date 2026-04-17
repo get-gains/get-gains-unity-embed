@@ -9,8 +9,7 @@ using UnityEngine;
 /// - BrandonBartram98/MediaPipe-UnitySolver: per-bone dampener and Slerp(rotation, target, lerpAmount).
 ///
 /// Strategy: rotation-only on bones + root scale for proportions. Landmarks map through PoseLandmarkMapping
-/// (XY-relative depth multiplier) so Z tracks body depth without stretching the figure. Bones align to mapped
-/// directions root-to-leaf; root height scale uses Y span only.
+/// (XY-relative depth multiplier). Bones align to mapped directions root-to-leaf; root height scale uses Y span only.
 /// </summary>
 public class HumanoidPoseDriver : MonoBehaviour
 {
@@ -344,7 +343,8 @@ public class HumanoidPoseDriver : MonoBehaviour
             Quaternion bindWorldRot = bone.rotation;
 
             bool isHips = m.From == "MID_HIP" && m.To == "MID_SHOULDER";
-            bool isNeck = m.From == "MID_SHOULDER" && m.To == "HEAD_CENTER";
+            bool isNeck = (m.From == "MID_SHOULDER" && m.To == "NECK_VIRTUAL") ||
+                          (m.From == "NECK_VIRTUAL" && m.To == "NOSE");
             float blend = (isHips || isNeck) ? spineBlend : limbBlend;
 
             _bones.Add(new RuntimeBone
@@ -424,7 +424,8 @@ public class HumanoidPoseDriver : MonoBehaviour
             if (!_pos.TryGetValue(rb.From, out Vector3 from)) continue;
             if (!_pos.TryGetValue(rb.To, out Vector3 to)) continue;
 
-            bool isNeck = rb.From == "MID_SHOULDER" && rb.To == "HEAD_CENTER";
+            bool isNeck = (rb.From == "MID_SHOULDER" && rb.To == "NECK_VIRTUAL") ||
+                          (rb.From == "NECK_VIRTUAL" && rb.To == "NOSE");
             if (isNeck && !driveHead) continue; // allow disabling head driving if it misbehaves
 
             bool isArm = isArmBone(rb.From, rb.To);
