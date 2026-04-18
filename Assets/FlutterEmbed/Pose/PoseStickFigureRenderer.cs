@@ -10,6 +10,9 @@ public class PoseStickFigureRenderer : MonoBehaviour
 {
     [Header("Scale and position")]
     [SerializeField] private float scale = 5f;
+    // The fields below mirror HumanoidPoseDriver inspector knobs for documentation purposes.
+    // PoseLandmarkMapping handles their logic internally; the C# code never reads them directly.
+#pragma warning disable CS0414
     [Tooltip("Scale for landmark Z (depth). Match HumanoidPoseDriver.poseDepthScale for alignment.")]
     [SerializeField] private float depthScale = 5f;
     [Tooltip("Invert X to match 2D raw vertices (must match HumanoidPoseDriver.invertLandmarkX).")]
@@ -21,6 +24,7 @@ public class PoseStickFigureRenderer : MonoBehaviour
     [Tooltip("Clamp raw X,Y to this range (match HumanoidPoseDriver.xyClampMin/Max).")]
     [SerializeField] private float xyClampMin = -0.2f;
     [SerializeField] private float xyClampMax = 1.2f;
+#pragma warning restore CS0414
     [SerializeField] private Vector3 centerOffset = Vector3.zero;
 
     [Header("Depth")]

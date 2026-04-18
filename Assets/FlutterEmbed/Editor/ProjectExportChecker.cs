@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEditor;
+using UnityEditor.Android;
 using UnityEditor.Build;
 using UnityEngine;
 
@@ -68,6 +69,11 @@ internal class ProjectExportChecker
                     "(see File -> Build settings -> Player Settings -> Other Settings -> Target architectures)");
                 return ProjectExportCheckerResult.Failure();
             }
+
+            // Diagnostics Data (crash reporting) requires symbols to resolve stack traces.
+            // The exact enum type name for DebugSymbols.level varies by Unity minor version,
+            // so use reflection to set the value (2 = Full in all known Android symbol enums).
+            TrySetDebugSymbolsFull(ref precheckWarnings);
 
             return PrepareExportDirectory("android", "unityLibrary", precheckWarnings);
         }
@@ -139,6 +145,20 @@ internal class ProjectExportChecker
             precheckWarnings.Add($"'C++ compiler configuration' is set to 'Debug'. This can be useful for debugging during development " +
                 "but should be set to 'Release' when building your release version " +
                 "(see File -> Build settings -> Player Settings -> Other Settings -> C++ compiler configuration)");
+        }
+
+        // If Diagnostics Data / Crash Reporting is enabled but the project is not linked to
+        // Unity Services, BuildPipeline.BuildPlayer will throw a UriFormatException ("Invalid URI:
+        // The URI is empty") from CrashReporting.GetUsymUploadAuthToken(). The build still
+        // succeeds but the log is noisy and symbols are not uploaded.
+        // Fix: Edit → Project Settings → Services → Link Project (or disable Diagnostics Data).
+        if (string.IsNullOrEmpty(CloudProjectSettings.projectId))
+        {
+            precheckWarnings.Add("This project is not linked to a Unity Services project. " +
+                "If Diagnostics Data is enabled, a UriFormatException (empty URI) will be logged " +
+                "during the build and symbols will not be uploaded — the build itself still succeeds. " +
+                "Fix: Edit → Project Settings → Services → link the project, then re-export. " +
+                "Or disable Diagnostics Data in Project Settings → Services → Diagnostics.");
         }
 
         return true;
@@ -288,6 +308,35 @@ internal class ProjectExportChecker
                 Directory.Delete(selectedDirectory.FullName, true);
             }
             return ProjectExportCheckerResult.Success(buildPlayerOptions, precheckWarnings);
+        }
+    }
+
+    /// <summary>
+    /// Sets Android debug symbols to Full (value 2) via reflection so the code compiles
+    /// regardless of the exact enum type name, which changed between Unity minor versions.
+    /// UnityEditor.Android.UserBuildSettings.DebugSymbols.level — Full = 2 in all versions.
+    /// </summary>
+    private static void TrySetDebugSymbolsFull(ref List<string> precheckWarnings)
+    {
+        try
+        {
+            // DebugSymbols is a static nested class — use typeof + BindingFlags.Static.
+            var prop = typeof(UserBuildSettings.DebugSymbols).GetProperty("level",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            if (prop == null) return;
+
+            var current = prop.GetValue(null);
+            int currentInt = Convert.ToInt32(current);
+            if (currentInt >= 2) return; // already Full
+
+            var fullValue = Enum.ToObject(prop.PropertyType, 2);
+            prop.SetValue(null, fullValue);
+            precheckWarnings.Add("Debug symbols were automatically set to 'Full' so Diagnostics Data can resolve crash-report stack traces. " +
+                "(Player Settings → Publishing Settings → Debug Symbols)");
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[ProjectExportChecker] Could not auto-set debug symbols: {e.Message}");
         }
     }
 

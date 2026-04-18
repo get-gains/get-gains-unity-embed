@@ -269,23 +269,31 @@ public class CosmeticManager : MonoBehaviour
         string categoryFolder = GetCategoryFolder(category);
         string resourcePath = $"FlutterEmbed/Cosmetics/CosmeticAssets/{categoryFolder}/{assetRef}";
 
+        Debug.Log($"[CosmeticManager] Loading prefab at '{resourcePath}'");
         var prefab = Resources.Load<GameObject>(resourcePath);
         if (prefab == null)
         {
-            Debug.LogWarning($"[CosmeticManager] Prefab not found at '{resourcePath}'. Skipping (graceful fallback).");
+            Debug.LogWarning($"[CosmeticManager] Prefab NOT FOUND at '{resourcePath}'. " +
+                             $"Check: (1) file exists under Resources/{resourcePath}, " +
+                             $"(2) assetRef casing matches folder name, " +
+                             $"(3) category folder maps correctly (categoryFolder='{categoryFolder}').");
             return false;
         }
 
+        Debug.Log($"[CosmeticManager] Prefab found '{assetRef}' — instantiating and attaching to slot '{category}'.");
         var instance = Instantiate(prefab);
-        instance.name = assetRef; // Clean name without "(Clone)"
+        instance.name = assetRef;
 
         if (!slot.AttachCosmetic(instance))
         {
-            Debug.LogWarning($"[CosmeticManager] Failed to attach '{assetRef}' to slot '{category}'.");
+            Debug.LogWarning($"[CosmeticManager] AttachCosmetic FAILED for '{assetRef}' in slot '{category}'. " +
+                             $"Check: (1) slot has a valid anchor bone assigned, " +
+                             $"(2) anchor bone exists on the active rig.");
             Destroy(instance);
             return false;
         }
 
+        Debug.Log($"[CosmeticManager] '{assetRef}' attached successfully to slot '{category}'.");
         return true;
     }
 

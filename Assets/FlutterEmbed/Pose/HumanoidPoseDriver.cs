@@ -28,7 +28,9 @@ public class HumanoidPoseDriver : MonoBehaviour
     [Tooltip("Must match PoseStickFigureRenderer.scale so positions align.")]
     [SerializeField] private float poseScale = 5f;
     [Tooltip("Scale for landmark Z (depth).")]
+#pragma warning disable CS0414
     [SerializeField] private float poseDepthScale = 5f;
+#pragma warning restore CS0414
     [Tooltip("Invert landmark X so left/right matches 2D (person left = Unity -X when facing +Z).")]
     [SerializeField] private bool invertLandmarkX = true;
     [Tooltip("MLKit: negative Z = toward camera (front). When false, use MLKit Z as-is; enable only if front/back is flipped.")]
@@ -42,10 +44,12 @@ public class HumanoidPoseDriver : MonoBehaviour
     [Tooltip("Flip head/neck Z if face points backwards relative to camera.")]
     [SerializeField] private bool invertHeadZ = false;
     [Tooltip("MLKit z is not 0-1; divide raw z by this so depth stays sensible (e.g. 100).")]
+#pragma warning disable CS0414
     [SerializeField] private float zNormalizeScale = 100f;
     [Tooltip("Clamp normalized X,Y to this range so out-of-frame landmarks don't blow up (MediaPipe can return outside 0-1).")]
     [SerializeField] private float xyClampMin = -0.2f;
     [SerializeField] private float xyClampMax = 1.2f;
+#pragma warning restore CS0414
 
     // Runtime access for debug tools (inverts / options that affect pose mapping)
     public bool InvertLandmarkX { get => invertLandmarkX; set => invertLandmarkX = value; }

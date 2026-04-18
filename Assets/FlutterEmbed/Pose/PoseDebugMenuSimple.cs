@@ -17,6 +17,7 @@ public class PoseDebugMenuSimple : MonoBehaviour
     [SerializeField] private float buttonPadding = 0f;
 
     private bool _visible;
+    private bool _hiddenForCosmeticMode;
     private Rect _windowRect = new Rect(20, 20, 320, 260);
 
     private void Awake()
@@ -24,6 +25,16 @@ public class PoseDebugMenuSimple : MonoBehaviour
         if (driver == null)
             driver = GetComponent<HumanoidPoseDriver>();
         _visible = startVisible;
+    }
+
+    /// <summary>
+    /// Hide the entire debug UI in Cosmetic view mode so it doesn't intercept touches
+    /// or confuse users inspecting accessories.
+    /// </summary>
+    public void SetCosmeticMode(bool cosmetic)
+    {
+        _hiddenForCosmeticMode = cosmetic;
+        if (cosmetic) _visible = false; // also collapse the window if open
     }
 
     private void Update()
@@ -37,6 +48,8 @@ public class PoseDebugMenuSimple : MonoBehaviour
 
     private void OnGUI()
     {
+        if (_hiddenForCosmeticMode) return;
+
         // Full-width bar along the bottom, very visible on device.
         float x = buttonPadding;
         float y = Screen.height - buttonPadding - buttonHeight;

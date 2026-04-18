@@ -17,6 +17,7 @@ public class FlutterUnityBridge : MonoBehaviour
     private OrbitCameraController _orbitController;
     private float rotationSpeed;
     private bool sceneLoadedSent;
+    private CameraViewMode _currentViewMode = CameraViewMode.Workout;
 
     private void Awake()
     {
@@ -99,6 +100,11 @@ public class FlutterUnityBridge : MonoBehaviour
     {
         if (_orbitController == null) return;
 
+        // In Cosmetic mode the target is set once by FrameCameraCosmetic and must
+        // not be overwritten every frame — doing so locks the camera to the hips
+        // and prevents vertical pan (the user's drag snaps back immediately).
+        if (_currentViewMode == CameraViewMode.Cosmetic) return;
+
         // Prefer humanoid driver for tracking when present (stick figure is hidden).
         var humanoid = GetHumanoidDriver();
         if (humanoid != null && humanoid.FigureHeight > 0.1f)
@@ -171,6 +177,43 @@ public class FlutterUnityBridge : MonoBehaviour
             posePlaybackController.SetSkeletonColor(color);
     }
 
+    /// <summary>
+    /// Flutter → Unity: switch camera view mode.
+    /// Message: "WORKOUT" | "COSMETIC"
+    /// Workout  — full-figure framing, wide orbit limits (default).
+    /// Cosmetic — upper-body close-up, front-facing, tight zoom limit for accessory inspection.
+    /// </summary>
+    public void SetCameraViewMode(string message)
+    {
+        string raw = (message ?? "WORKOUT").Trim().ToUpperInvariant();
+        _currentViewMode = raw == "COSMETIC" ? CameraViewMode.Cosmetic : CameraViewMode.Workout;
+
+        var orbit = EnsureOrbitController();
+        if (orbit != null)
+            orbit.SetViewMode(_currentViewMode);
+
+        // Reduce frame rate in Cosmetic mode (wardrobe is static inspection, not live pose).
+        Application.targetFrameRate = _currentViewMode == CameraViewMode.Cosmetic ? 30 : 60;
+
+        // Show / hide pose-debug overlay so it can't block touch gestures in wardrobe.
+        var debugMenu = FindAnyObjectByType<PoseDebugMenuSimple>();
+        if (debugMenu != null)
+            debugMenu.SetCosmeticMode(_currentViewMode == CameraViewMode.Cosmetic);
+
+        Debug.Log($"[FlutterUnityBridge] SetCameraViewMode: {_currentViewMode}, targetFrameRate={Application.targetFrameRate}");
+    }
+
+    /// <summary>
+    /// Flutter → Unity: re-apply Cosmetic framing (restores close-up after user pans away).
+    /// Message: ignored.
+    /// </summary>
+    public void ResetCosmeticView(string _)
+    {
+        if (_currentViewMode == CameraViewMode.Cosmetic)
+            FrameCameraCosmetic();
+        Debug.Log("[FlutterUnityBridge] ResetCosmeticView");
+    }
+
     public void SetCameraAngle(string message)
     {
         var orbit = EnsureOrbitController();
@@ -200,6 +243,45 @@ public class FlutterUnityBridge : MonoBehaviour
         posePlaybackController.SetDebugInvertHeadDepthZ(opts.invertHeadDepthZ);
         Debug.Log(
             $"[FlutterUnityBridge] SetPoseDebugOptions swapArmLandmarks={opts.swapArmLandmarks} forceShowStickFigure={opts.forceShowStickFigure} invertArmDepthZ={opts.invertArmDepthZ} invertHeadDepthZ={opts.invertHeadDepthZ}");
+    }
+
+    /// <summary>
+    /// Cosmetic framing: shift orbit target up to the upper-body/chest area and apply
+    /// Cosmetic view-mode distance/angle so headwear and accessories fill the viewport.
+    /// Safe to call even before pose frames are loaded — uses humanoid rig pose or
+    /// falls back to a default height when the rig has not been driven yet.
+    /// </summary>
+    private void FrameCameraCosmetic()
+    {
+        Vector3 hipsCenter = Vector3.zero;
+        float   figHeight  = 1.8f; // sensible default if rig not yet driven
+
+        var humanoid = GetHumanoidDriver();
+        if (humanoid != null && humanoid.FigureHeight > 0.1f)
+        {
+            hipsCenter = humanoid.HipsWorldPosition;
+            figHeight  = humanoid.FigureHeight;
+        }
+        else
+        {
+            var renderer = GetFigureRenderer();
+            if (renderer != null && renderer.FigureHeight > 0.1f)
+            {
+                hipsCenter = renderer.FigureCenter;
+                figHeight  = renderer.FigureHeight;
+            }
+        }
+
+        // Bias the look-at point toward the upper chest so the face and head
+        // accessories are centred in the viewport at cosmetic close-up distance.
+        Vector3 cosmeticCenter = hipsCenter + Vector3.up * (figHeight * 0.35f);
+
+        var orbit = EnsureOrbitController();
+        if (orbit == null) return;
+
+        orbit.SetViewMode(CameraViewMode.Cosmetic);
+        orbit.SetTarget(cosmeticCenter, figHeight);
+        Debug.Log($"[FlutterUnityBridge] FrameCameraCosmetic: center={cosmeticCenter}, height={figHeight:F2}");
     }
 
     private void FrameCameraToFigure()
@@ -294,6 +376,7 @@ public class FlutterUnityBridge : MonoBehaviour
 
     public void LoadEquippedCosmetics(string message)
     {
+        Debug.Log($"[FlutterUnityBridge] LoadEquippedCosmetics: viewMode={_currentViewMode}, payload={message}");
         var mgr = EnsureCosmeticManager();
         if (mgr != null)
         {
@@ -304,6 +387,11 @@ public class FlutterUnityBridge : MonoBehaviour
             Debug.LogWarning("[FlutterUnityBridge] LoadEquippedCosmetics: no CosmeticManager available.");
             SendToFlutter.Send("cosmetics_loaded");
         }
+
+        // Reframe camera when in Cosmetic mode so accessories are visible
+        // without requiring the user to pinch-zoom.
+        if (_currentViewMode == CameraViewMode.Cosmetic)
+            FrameCameraCosmetic();
     }
 
     public void PreviewCosmetic(string message)
