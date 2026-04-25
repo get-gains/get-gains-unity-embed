@@ -1,6 +1,6 @@
 ## Context
 
-This Unity project is embedded inside a Flutter app using **flutter_embed_unity** (Unity 6000.0 / flutter_embed_unity_6000_0_android). The Flutter app shows the Unity view as a widget and can send/receive string messages.
+This Unity project is embedded inside a Flutter app using **flutter_embed_unity** (Unity **6000.4.2** / `flutter_embed_unity_6000_0_android` on the Flutter side). The Flutter app shows the Unity view as a widget and can send/receive string messages.
 
 ## Your Task
 
@@ -36,7 +36,7 @@ Use these exact names so the Flutter app can call your methods:
 - The Flutter app calls:  
   `SendToUnity("FlutterUnityBridge", "MethodName", "message")`  
   So the GameObject must be named **FlutterUnityBridge** and the script must have **public void** methods that take a **single string**.
-- Use the correct namespace/API for **SendToFlutter** (or equivalent) for Unity 6000.0 with flutter_embed_unity. If the plugin provides a prefab or scene with a bridge, you can extend or replace it as long as the GameObject name and method names above are kept.
+- Use the correct namespace/API for **SendToFlutter** (or equivalent) for Unity **6000.4.x** with flutter_embed_unity. If the plugin provides a prefab or scene with a bridge, you can extend or replace it as long as the GameObject name and method names above are kept.
 - Keep the main scene simple: one persistent GameObject `FlutterUnityBridge` with the bridge script, plus any visuals you need (e.g. a rotating cube for `SetRotationSpeed`).
 
 ## Summary checklist
