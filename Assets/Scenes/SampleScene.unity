@@ -800,11 +800,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6e773779d7601ee4b81299ece68f4651, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CosmeticManager
-  slots:
-  - {fileID: 11400000, guid: def479572e5890b44bbf728734da7b03, type: 2}
-  - {fileID: 11400000, guid: 4507853461d13d340a77008ba1863dd9, type: 2}
-  - {fileID: 11400000, guid: ac15a850d1af9854b90287219ac6a77e, type: 2}
-  - {fileID: 11400000, guid: 6b679fec5f6118c40a124c35154580da, type: 2}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
