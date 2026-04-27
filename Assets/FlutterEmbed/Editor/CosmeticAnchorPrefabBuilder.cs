@@ -118,7 +118,7 @@ public static class CosmeticAnchorPrefabBuilder
         var renderers = instance.GetComponentsInChildren<Renderer>(true);
         if (renderers.Length == 0)
         {
-            Object.DestroyImmediate(root);
+            UnityEngine.Object.DestroyImmediate(root);
             Debug.LogWarning($"[CosmeticAnchorPrefabBuilder] Skip (no renderers): {assetRef}");
             return;
         }
@@ -143,7 +143,7 @@ public static class CosmeticAnchorPrefabBuilder
 
         var primary = OutResources + "/" + assetRef + ".prefab";
         PrefabUtility.SaveAsPrefabAsset(root, primary);
-        Object.DestroyImmediate(root);
+        UnityEngine.Object.DestroyImmediate(root);
 
         var mirrorPath = OutMirror + "/" + assetRef + ".prefab";
         if (File.Exists(mirrorPath)) AssetDatabase.DeleteAsset(mirrorPath);

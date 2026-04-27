@@ -70,12 +70,16 @@ public static class PoseLandmarkMapping
         float depthMultiplier,
         bool invertDepth,
         double zRef,
-        Vector3 centerOffset)
+        Vector3 centerOffset,
+        bool invertLandmarkX = false,
+        bool invertLandmarkZ = false)
     {
         float x = (float)(p.X - 0.5) * xyScale;
+        if (invertLandmarkX) x = -x;
         float y = (float)(1.0 - p.Y - 0.5) * xyScale;
         float z = (float)((p.Z - zRef) * depthMultiplier);
         if (invertDepth) z = -z;
+        if (invertLandmarkZ) z = -z;
         return centerOffset + new Vector3(x, y, z);
     }
 
@@ -90,6 +94,15 @@ public static class PoseLandmarkMapping
         "LEFT_ELBOW", "RIGHT_ELBOW",
         "LEFT_WRIST", "RIGHT_WRIST",
         "LEFT_INDEX", "LEFT_PINKY", "RIGHT_INDEX", "RIGHT_PINKY",
+    };
+
+    /// <summary>Hip joints excluded so torso / Uniform-Z stay consistent; flips leg chain in world Z only.</summary>
+    private static readonly string[] LegInvertZKeys =
+    {
+        "LEFT_KNEE", "RIGHT_KNEE",
+        "LEFT_ANKLE", "RIGHT_ANKLE",
+        "LEFT_HEEL", "RIGHT_HEEL",
+        "LEFT_FOOT_INDEX", "RIGHT_FOOT_INDEX",
     };
 
     /// <summary>
@@ -282,6 +295,17 @@ public static class PoseLandmarkMapping
         }
     }
 
+    public static void ApplyInvertLegWorldZ(Dictionary<string, Vector3> worldPos, bool enabled)
+    {
+        if (!enabled || worldPos == null) return;
+        for (int i = 0; i < LegInvertZKeys.Length; i++)
+        {
+            string key = LegInvertZKeys[i];
+            if (!worldPos.TryGetValue(key, out Vector3 p)) continue;
+            worldPos[key] = new Vector3(p.x, p.y, -p.z);
+        }
+    }
+
     /// <summary>
     /// Debug: negate world Z on head cluster (nose/eyes/ears). Call after head straightening if used.
     /// </summary>
@@ -295,4 +319,94 @@ public static class PoseLandmarkMapping
             worldPos[key] = new Vector3(p.x, p.y, -p.z);
         }
     }
+
+    // ── Torso / hip (3D vs 2D) debug ───────────────────────────────────────
+
+    public enum TorsoDebugFlattenMode
+    {
+        None = 0,
+        /// <summary>Same world Z for L/R shoulder and L/R hip (average). Reduces an X / bow-tie from depth.</summary>
+        UniformZ = 1,
+        /// <summary>Same world X for all four. Rare; try if L/R are inconsistent in X.</summary>
+        UniformX = 2
+    }
+
+    public struct TorsoHipDebugInfo
+    {
+        public bool SidesCrossInXz;
+        public float ZSpread;
+        public float XSpread;
+    }
+
+    /// <summary>False if any corner missing. XZ = top-down. Crossing L-side vs R-side segments = twisted torso.</summary>
+    public static bool TryComputeTorsoHipDebug(
+        IReadOnlyDictionary<string, Vector3> pos, out TorsoHipDebugInfo info)
+    {
+        info = default;
+        if (pos == null) return false;
+        if (!pos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) ||
+            !pos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs) ||
+            !pos.TryGetValue("LEFT_HIP", out Vector3 lh) ||
+            !pos.TryGetValue("RIGHT_HIP", out Vector3 rh))
+            return false;
+
+        Vector2 ls2 = new Vector2(ls.x, ls.z);
+        Vector2 rs2 = new Vector2(rs.x, rs.z);
+        Vector2 lh2 = new Vector2(lh.x, lh.z);
+        Vector2 rh2 = new Vector2(rh.x, rh.z);
+
+        float minZ = Mathf.Min(ls.z, rs.z, lh.z, rh.z);
+        float maxZ = Mathf.Max(ls.z, rs.z, lh.z, rh.z);
+        float minX = Mathf.Min(ls.x, rs.x, lh.x, rh.x);
+        float maxX = Mathf.Max(ls.x, rs.x, lh.x, rh.x);
+
+        info = new TorsoHipDebugInfo
+        {
+            SidesCrossInXz = SegmentsIntersectOpen2D(ls2, lh2, rs2, rh2),
+            ZSpread = maxZ - minZ,
+            XSpread = maxX - minX
+        };
+        return true;
+    }
+
+    public static void ApplyTorsoDebugFlatten(
+        System.Collections.Generic.IDictionary<string, Vector3> pos,
+        TorsoDebugFlattenMode mode)
+    {
+        if (mode == TorsoDebugFlattenMode.None || pos == null) return;
+        if (!pos.TryGetValue("LEFT_SHOULDER", out var ls)) return;
+        if (!pos.TryGetValue("RIGHT_SHOULDER", out var rs)) return;
+        if (!pos.TryGetValue("LEFT_HIP", out var lh)) return;
+        if (!pos.TryGetValue("RIGHT_HIP", out var rh)) return;
+
+        if (mode == TorsoDebugFlattenMode.UniformZ)
+        {
+            float mz = 0.25f * (ls.z + rs.z + lh.z + rh.z);
+            pos["LEFT_SHOULDER"] = new Vector3(ls.x, ls.y, mz);
+            pos["RIGHT_SHOULDER"] = new Vector3(rs.x, rs.y, mz);
+            pos["LEFT_HIP"] = new Vector3(lh.x, lh.y, mz);
+            pos["RIGHT_HIP"] = new Vector3(rh.x, rh.y, mz);
+        }
+        else if (mode == TorsoDebugFlattenMode.UniformX)
+        {
+            float mx = 0.25f * (ls.x + rs.x + lh.x + rh.x);
+            pos["LEFT_SHOULDER"] = new Vector3(mx, ls.y, ls.z);
+            pos["RIGHT_SHOULDER"] = new Vector3(mx, rs.y, rs.z);
+            pos["LEFT_HIP"] = new Vector3(mx, lh.y, lh.z);
+            pos["RIGHT_HIP"] = new Vector3(mx, rh.y, rh.z);
+        }
+    }
+
+    private static bool SegmentsIntersectOpen2D(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
+    {
+        float o1 = Orient2D(a, b, c);
+        float o2 = Orient2D(a, b, d);
+        float o3 = Orient2D(c, d, a);
+        float o4 = Orient2D(c, d, b);
+        if (o1 * o2 >= 0f || o3 * o4 >= 0f) return false;
+        return o1 * o2 < 0f && o3 * o4 < 0f;
+    }
+
+    private static float Orient2D(Vector2 a, Vector2 b, Vector2 c) =>
+        (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
 }

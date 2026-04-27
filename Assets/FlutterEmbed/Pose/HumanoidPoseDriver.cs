@@ -57,6 +57,12 @@ public class HumanoidPoseDriver : MonoBehaviour
     public bool FlattenDirectionsToXY { get => flattenDirectionsToXY; set => flattenDirectionsToXY = value; }
     public bool FlipLimbForwardZ { get => flipLimbForwardZ; set => flipLimbForwardZ = value; }
 
+    /// <summary>Debug: collapse torso to a plane to fix bow-tie / X-shaped hips in 3D (depth mismatch L/R).</summary>
+    public PoseLandmarkMapping.TorsoDebugFlattenMode TorsoDebugFlatten { get; set; } =
+        PoseLandmarkMapping.TorsoDebugFlattenMode.UniformZ;
+
+    public PoseLandmarkMapping.TorsoHipDebugInfo LastTorsoHipDebug { get; private set; }
+
     // Runtime access for arm/limb tuning
     public float SmoothSpeed { get => smoothSpeed; set => smoothSpeed = Mathf.Max(0.1f, value); }
     public float MaxRotationPerFrame
@@ -198,6 +204,9 @@ public class HumanoidPoseDriver : MonoBehaviour
     /// <summary>If true, negate world Z on head cluster after head straightening (debug).</summary>
     private bool _debugInvertHeadDepthZ;
 
+    /// <summary>If true, negate world Z on leg chain (knee–foot, not hip) so legs match camera depth like arms (debug).</summary>
+    private bool _debugInvertLegDepthZ = true;
+
     private Vector3 _headForwardSmoothed;
 
     private Vector3 _figureCenter;
@@ -232,6 +241,12 @@ public class HumanoidPoseDriver : MonoBehaviour
     public void SetDebugInvertHeadDepthZ(bool value)
     {
         _debugInvertHeadDepthZ = value;
+    }
+
+    public bool DebugInvertLegDepthZ
+    {
+        get => _debugInvertLegDepthZ;
+        set => _debugInvertLegDepthZ = value;
     }
 
     /// <summary>First active driveable HumanoidPoseDriver in loaded scenes, or null.</summary>
@@ -505,7 +520,9 @@ public class HumanoidPoseDriver : MonoBehaviour
                 zMult,
                 invertDepthAxis,
                 zRef,
-                Vector3.zero);
+                Vector3.zero,
+                invertLandmarkX,
+                invertLandmarkZ);
             _confidence[kvp.Key] = Mathf.Clamp01((float)kvp.Value.Confidence);
         }
 
@@ -529,6 +546,7 @@ public class HumanoidPoseDriver : MonoBehaviour
         if (_debugSwapArmLandmarks)
             ApplyDebugArmLandmarkSwap();
         PoseLandmarkMapping.ApplyInvertArmWorldZ(_pos, _debugInvertArmDepthZ);
+        PoseLandmarkMapping.ApplyInvertLegWorldZ(_pos, _debugInvertLegDepthZ);
         // After shoulders/depth are final so torso "forward" matches retargeting debug.
         PoseLandmarkMapping.ApplyHeadStraightAheadNearShoulder(
             _pos,
@@ -536,7 +554,33 @@ public class HumanoidPoseDriver : MonoBehaviour
             ref _headForwardSmoothed,
             headForwardSmoothAlpha);
         PoseLandmarkMapping.ApplyInvertHeadWorldZ(_pos, _debugInvertHeadDepthZ);
+        if (TorsoDebugFlatten != PoseLandmarkMapping.TorsoDebugFlattenMode.None)
+        {
+            PoseLandmarkMapping.ApplyTorsoDebugFlatten(_pos, TorsoDebugFlatten);
+            RecomputeMidHipShoulderAndHeadCenter();
+        }
         ApplyVirtualNeckLandmark();
+        if (!PoseLandmarkMapping.TryComputeTorsoHipDebug(_pos, out var th)) th = default;
+        LastTorsoHipDebug = th;
+    }
+
+    private void RecomputeMidHipShoulderAndHeadCenter()
+    {
+        if (_pos.TryGetValue("LEFT_HIP", out Vector3 lh) && _pos.TryGetValue("RIGHT_HIP", out Vector3 rh))
+        {
+            _pos["MID_HIP"] = 0.5f * (lh + rh);
+            _confidence["MID_HIP"] = 1f;
+        }
+        if (_pos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) && _pos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs))
+        {
+            _pos["MID_SHOULDER"] = 0.5f * (ls + rs);
+            _confidence["MID_SHOULDER"] = 1f;
+        }
+        if (_pos.TryGetValue("MID_SHOULDER", out Vector3 midSh) && _pos.TryGetValue("NOSE", out Vector3 nose))
+        {
+            _pos["HEAD_CENTER"] = Vector3.Lerp(midSh, nose, 0.5f);
+            _confidence["HEAD_CENTER"] = 1f;
+        }
     }
 
     /// <summary>
