@@ -36,8 +36,8 @@ get_gains_app/
 
 ## Prerequisites
 
-- Flutter SDK, Android SDK, NDK (e.g. 27.2.12479018 for Unity 6000.0)
-- Unity **6000.0** with the [flutter_embed_unity](https://github.com/learntoflutter/flutter_embed_unity) export flow
+- Flutter SDK, Android SDK, and the **Android NDK** bundled or recommended for your Unity install (Unity Hub → add **Android Build Support** to the editor, or **Edit → Preferences → External Tools** in Unity)
+- Unity **6000.4.2** (editor `6000.4.2f1` per `ProjectSettings/ProjectVersion.txt`) with the [flutter_embed_unity](https://github.com/learntoflutter/flutter_embed_unity) export flow
 - Your Unity project set up for Flutter embedding (see this repo’s `docs/flutter-unity.md` for the bridge script)
 
 ---
@@ -58,7 +58,7 @@ Do **not** run `flutter run` yet — the Android build will fail until `unityLib
 
 In **Unity** (this project):
 
-1. Open your Unity 6000.0 project (the one that has the `FlutterUnityBridge` scene/script).
+1. Open this Unity **6000.4.2** project (the one that has the `FlutterUnityBridge` scene/script).
 2. Use the **flutter_embed_unity** export (e.g. **File → Build Settings → Export for Flutter** or the plugin’s export option).
 3. When the plugin asks for an export path, choose:
    - **`<path-to-this-repo>/get_gains_app/android/unityLibrary`**  
