@@ -10,14 +10,13 @@ public class PoseStickFigureRenderer : MonoBehaviour
 {
     [Header("Scale and position")]
     [SerializeField] private float scale = 5f;
-    // The fields below mirror HumanoidPoseDriver inspector knobs for documentation purposes.
-    // PoseLandmarkMapping handles their logic internally; the C# code never reads them directly.
+    // The fields below mirror HumanoidPoseDriver inspector knobs for documentation.
 #pragma warning disable CS0414
     [Tooltip("Scale for landmark Z (depth). Match HumanoidPoseDriver.poseDepthScale for alignment.")]
     [SerializeField] private float depthScale = 5f;
     [Tooltip("Invert X to match 2D raw vertices (must match HumanoidPoseDriver.invertLandmarkX).")]
     [SerializeField] private bool invertLandmarkX = true;
-    [Tooltip("Invert Z so front (MLKit negative Z) = Unity +Z; must match HumanoidPoseDriver.invertLandmarkZ. Default false to use MLKit Z as-is.")]
+    [Tooltip("Depth flip on mapped Z; must match HumanoidPoseDriver.invertLandmarkZ for alignment.")]
     [SerializeField] private bool invertLandmarkZ = false;
     [Tooltip("Z from MLKit is not 0-1; divide by this before scaling (match HumanoidPoseDriver.zNormalizeScale).")]
     [SerializeField] private float zNormalizeScale = 100f;
@@ -26,6 +25,17 @@ public class PoseStickFigureRenderer : MonoBehaviour
     [SerializeField] private float xyClampMax = 1.2f;
 #pragma warning restore CS0414
     [SerializeField] private Vector3 centerOffset = Vector3.zero;
+
+    /// <summary>Keep in sync with <see cref="HumanoidPoseDriver"/> so overlay matches humanoid.</summary>
+    public void SetLandmarkInversion(bool invX, bool invZ)
+    {
+        invertLandmarkX = invX;
+        invertLandmarkZ = invZ;
+    }
+
+    public PoseLandmarkMapping.TorsoDebugFlattenMode TorsoDebugFlatten { get; set; } =
+        PoseLandmarkMapping.TorsoDebugFlattenMode.UniformZ;
+    public PoseLandmarkMapping.TorsoHipDebugInfo LastTorsoHipDebug { get; private set; }
 
     [Header("Depth")]
     [Tooltip("Match HumanoidPoseDriver.zSpanFloor.")]
@@ -89,6 +99,7 @@ public class PoseStickFigureRenderer : MonoBehaviour
     private Color _baseColor = Color.cyan;
     private bool _debugInvertArmDepthZ;
     private bool _debugInvertHeadDepthZ;
+    private bool _debugInvertLegDepthZ = true;
     private Vector3 _headForwardSmoothed;
 
     public Vector3 FigureCenter => _figureCenter;
@@ -102,6 +113,11 @@ public class PoseStickFigureRenderer : MonoBehaviour
     public void SetDebugInvertHeadDepthZ(bool value)
     {
         _debugInvertHeadDepthZ = value;
+    }
+
+    public void SetDebugInvertLegDepthZ(bool value)
+    {
+        _debugInvertLegDepthZ = value;
     }
 
     private void Awake()
@@ -232,18 +248,25 @@ public class PoseStickFigureRenderer : MonoBehaviour
                 zMult,
                 invertDepthAxis,
                 zRef,
-                centerOffset);
+                centerOffset,
+                invertLandmarkX,
+                invertLandmarkZ);
             positions[kvp.Key] = pos;
         }
 
         PoseLandmarkMapping.ApplyHeadClusterBlend(positions, headReachScale, headDepthScale);
         PoseLandmarkMapping.ApplyInvertArmWorldZ(positions, _debugInvertArmDepthZ);
+        PoseLandmarkMapping.ApplyInvertLegWorldZ(positions, _debugInvertLegDepthZ);
         PoseLandmarkMapping.ApplyHeadStraightAheadNearShoulder(
             positions,
             scale,
             ref _headForwardSmoothed,
             headForwardSmoothAlpha);
         PoseLandmarkMapping.ApplyInvertHeadWorldZ(positions, _debugInvertHeadDepthZ);
+        if (TorsoDebugFlatten != PoseLandmarkMapping.TorsoDebugFlattenMode.None)
+            PoseLandmarkMapping.ApplyTorsoDebugFlatten(positions, TorsoDebugFlatten);
+        if (!PoseLandmarkMapping.TryComputeTorsoHipDebug(positions, out var th)) th = default;
+        LastTorsoHipDebug = th;
 
         foreach (var kvp in positions)
         {

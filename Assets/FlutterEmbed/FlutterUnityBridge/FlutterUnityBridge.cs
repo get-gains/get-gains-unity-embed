@@ -56,6 +56,8 @@ public class FlutterUnityBridge : MonoBehaviour
                 // StartVisible = true so the window is shown on first load; user can hide it via the bottom bar.
                 var startVisibleField = typeof(PoseDebugMenuSimple).GetField("startVisible", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
                 if (startVisibleField != null) startVisibleField.SetValue(debugMenu, true);
+                var driverField = typeof(PoseDebugMenuSimple).GetField("driver", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if (driverField != null) driverField.SetValue(debugMenu, humanoid);
             }
         }
         if (preferStickFigureOnly && posePlaybackController != null)
@@ -225,7 +227,7 @@ public class FlutterUnityBridge : MonoBehaviour
 
     /// <summary>
     /// Debug / tuning for pose retargeting. Message: JSON from Flutter, e.g.
-    /// {"swapArmLandmarks":true,"forceShowStickFigure":true,"invertArmDepthZ":false,"invertHeadDepthZ":true}
+    /// {"swapArmLandmarks":true,"forceShowStickFigure":true,"invertArmDepthZ":false,"invertHeadDepthZ":true,"invertLegDepthZ":true}
     /// </summary>
     public void SetPoseDebugOptions(string message)
     {
@@ -241,8 +243,9 @@ public class FlutterUnityBridge : MonoBehaviour
         posePlaybackController.SetDebugForceStickFigure(opts.forceShowStickFigure);
         posePlaybackController.SetDebugInvertArmDepthZ(opts.invertArmDepthZ);
         posePlaybackController.SetDebugInvertHeadDepthZ(opts.invertHeadDepthZ);
+        posePlaybackController.SetDebugInvertLegDepthZ(opts.invertLegDepthZ);
         Debug.Log(
-            $"[FlutterUnityBridge] SetPoseDebugOptions swapArmLandmarks={opts.swapArmLandmarks} forceShowStickFigure={opts.forceShowStickFigure} invertArmDepthZ={opts.invertArmDepthZ} invertHeadDepthZ={opts.invertHeadDepthZ}");
+            $"[FlutterUnityBridge] SetPoseDebugOptions swapArmLandmarks={opts.swapArmLandmarks} forceShowStickFigure={opts.forceShowStickFigure} invertArmDepthZ={opts.invertArmDepthZ} invertHeadDepthZ={opts.invertHeadDepthZ} invertLegDepthZ={opts.invertLegDepthZ}");
     }
 
     /// <summary>
@@ -448,4 +451,5 @@ public class PoseDebugOptionsJson
     public bool forceShowStickFigure;
     public bool invertArmDepthZ;
     public bool invertHeadDepthZ;
+    public bool invertLegDepthZ;
 }

@@ -48,6 +48,7 @@ public class PosePlaybackController : MonoBehaviour
         {
             humanoidDriver.SetDebugInvertArmDepthZ(_debugInvertArmDepthZ);
             humanoidDriver.SetDebugInvertHeadDepthZ(_debugInvertHeadDepthZ);
+            humanoidDriver.DebugInvertLegDepthZ = _debugInvertLegDepthZ;
         }
     }
 
@@ -60,6 +61,7 @@ public class PosePlaybackController : MonoBehaviour
     private int _fps = 15;
     private bool _loop = true;
     private bool _playing;
+    private float _playbackSpeed = 1f;
     private Color _skeletonColor = Color.cyan;
 
     /// <summary>When true, keep the cyan stick figure visible on top of the humanoid for comparison.</summary>
@@ -68,6 +70,7 @@ public class PosePlaybackController : MonoBehaviour
     private bool _debugInvertArmDepthZ;
 
     private bool _debugInvertHeadDepthZ;
+    private bool _debugInvertLegDepthZ = true;
 
     private void Awake()
     {
@@ -82,7 +85,7 @@ public class PosePlaybackController : MonoBehaviour
     {
         if (!_playing || _frames == null || _frames.Count == 0) return;
 
-        _frameTime += Time.deltaTime;
+        _frameTime += Time.deltaTime * _playbackSpeed;
         float frameDuration = 1f / Mathf.Max(1, _fps);
         while (_frameTime >= frameDuration)
         {
@@ -163,6 +166,15 @@ public class PosePlaybackController : MonoBehaviour
             poseRenderer.SetDebugInvertHeadDepthZ(value);
     }
 
+    public void SetDebugInvertLegDepthZ(bool value)
+    {
+        _debugInvertLegDepthZ = value;
+        if (humanoidDriver != null)
+            humanoidDriver.DebugInvertLegDepthZ = value;
+        if (poseRenderer != null)
+            poseRenderer.SetDebugInvertLegDepthZ(value);
+    }
+
     private void UpdateRenderer()
     {
         if (_frames == null || _frames.Count == 0) return;
@@ -192,4 +204,32 @@ public class PosePlaybackController : MonoBehaviour
 
     public int CurrentFrameIndex => _currentFrameIndex;
     public int FrameCount => _frames?.Count ?? 0;
+    public bool IsPlaying => _playing;
+
+    public bool Loop
+    {
+        get => _loop;
+        set => _loop = value;
+    }
+
+    /// <summary>1 = recorded FPS, 2 = double speed, etc. Clamped to &gt; 0.</summary>
+    public float PlaybackSpeed
+    {
+        get => _playbackSpeed;
+        set => _playbackSpeed = Mathf.Max(0.05f, value);
+    }
+
+    public void StepNextFrame()
+    {
+        if (_frames == null || _frames.Count == 0) return;
+        _currentFrameIndex = Mathf.Min(_currentFrameIndex + 1, _frames.Count - 1);
+        _frameTime = 0f;
+    }
+
+    public void StepPrevFrame()
+    {
+        if (_frames == null || _frames.Count == 0) return;
+        _currentFrameIndex = Mathf.Max(_currentFrameIndex - 1, 0);
+        _frameTime = 0f;
+    }
 }

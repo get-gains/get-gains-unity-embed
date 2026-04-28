@@ -36,6 +36,10 @@ public class OrbitCameraController : MonoBehaviour
     [Header("Damping")]
     [SerializeField] private float smoothTime = 0.08f;
 
+    [Header("Orbit sign")]
+    [Tooltip("When true, touch/mouse drag X is negated. Default off = drag direction matches finger/mouse X.")]
+    [SerializeField] private bool invertOrbitX = false;
+
     // ── View-mode constants ──────────────────────────────────────────────────
 
     private const float WorkoutHeightMultiplier  = 0.70f;
@@ -101,6 +105,12 @@ public class OrbitCameraController : MonoBehaviour
     /// Reframe the camera around <paramref name="center"/> using <paramref name="figureHeight"/>
     /// and the current view mode's height multiplier.
     /// </summary>
+    public bool InvertOrbitX
+    {
+        get => invertOrbitX;
+        set => invertOrbitX = value;
+    }
+
     public void SetTarget(Vector3 center, float figureHeight)
     {
         _target = center;
@@ -165,7 +175,8 @@ public class OrbitCameraController : MonoBehaviour
             if (t.phase == UnityEngine.InputSystem.TouchPhase.Moved)
             {
                 Vector2 delta = t.delta;
-                _targetYaw   += delta.x * orbitSpeed;
+                float dx = invertOrbitX ? -delta.x : delta.x;
+                _targetYaw   += dx * orbitSpeed;
                 _targetPitch -= delta.y * orbitSpeed;
                 _targetPitch  = Mathf.Clamp(_targetPitch, minPitch, maxPitch);
             }
@@ -213,7 +224,8 @@ public class OrbitCameraController : MonoBehaviour
             if (Mouse.current.rightButton.isPressed)
             {
                 Vector2 mouseDelta = Mouse.current.delta.ReadValue();
-                _targetYaw   += mouseDelta.x * orbitSpeed * 0.3f;
+                float mdx = invertOrbitX ? -mouseDelta.x : mouseDelta.x;
+                _targetYaw   += mdx * orbitSpeed * 0.3f;
                 _targetPitch -= mouseDelta.y * orbitSpeed * 0.3f;
                 _targetPitch  = Mathf.Clamp(_targetPitch, minPitch, maxPitch);
             }

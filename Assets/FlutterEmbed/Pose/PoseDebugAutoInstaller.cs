@@ -10,11 +10,21 @@ public static class PoseDebugAutoInstaller
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void InstallDebugMenu()
     {
-        var driver = Object.FindAnyObjectByType<HumanoidPoseDriver>();
+        var driver = HumanoidPoseDriver.FindBestDriveableDriver();
         if (driver == null) return;
 
-        // Ensure depth invert is off by default so debug menu and runtime start in the same state.
+        // Start with stable defaults: X inverted for 2D→3D, Z off unless a prefab set it.
+        driver.InvertLandmarkX = true;
         driver.InvertLandmarkZ = false;
+        driver.TorsoDebugFlatten = PoseLandmarkMapping.TorsoDebugFlattenMode.UniformZ;
+        driver.DebugInvertLegDepthZ = true;
+        var fig = Object.FindAnyObjectByType<PoseStickFigureRenderer>(FindObjectsInactive.Exclude);
+        if (fig != null)
+        {
+            fig.SetLandmarkInversion(driver.InvertLandmarkX, driver.InvertLandmarkZ);
+            fig.TorsoDebugFlatten = driver.TorsoDebugFlatten;
+            fig.SetDebugInvertLegDepthZ(driver.DebugInvertLegDepthZ);
+        }
 
         var menu = driver.GetComponent<PoseDebugMenuSimple>();
         if (menu == null)
