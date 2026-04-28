@@ -1,332 +1,219 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 
 /// <summary>
-/// Manages cosmetic items on the character rig. Handles loading equipped cosmetics,
-/// previewing shop items, and clearing previews.
-///
-/// Attach to the character rig root (same GameObject as HumanoidPoseDriver or parent).
-/// Assign CosmeticSlot ScriptableObjects for each category in the Inspector.
-///
-/// Prefabs are loaded from Resources at:
-///   FlutterEmbed/Cosmetics/CosmeticAssets/{Category}/{assetRef}
-///
-/// Messages arrive from FlutterUnityBridge → delegates to this manager.
-/// Sends confirmation events back to Flutter via SendToFlutter.
+/// Loads up to three equipped cosmetic prefabs (by assetRef) and handles shop preview.
+/// JSON: <c>{"cosmetics":[{"assetRef":"beanie_get_gains","category":"…"}]}</c> — category is ignored.
 /// </summary>
 public class CosmeticManager : MonoBehaviour
 {
-    [Header("Cosmetic Slots")]
-    [Tooltip("Assign one CosmeticSlot ScriptableObject per category.")]
-    [SerializeField] private CosmeticSlot[] slots;
+    public const int MaxEquippedCosmetics = 3;
 
-    // ── Runtime State ──
+    private const string ResourcesPrefabRoot = "FlutterEmbed/Cosmetics/CosmeticAssets";
 
-    /// <summary>Category → CosmeticSlot lookup built from the serialized array.</summary>
-    private Dictionary<CosmeticSlot.CosmeticCategory, CosmeticSlot> _slotMap;
+    [Header("Optional — if unset, anchors are created/found under the humanoid Head bone")]
+    [SerializeField] private Transform headAnchor;
+    [SerializeField] private Transform facewearAnchor;
+    [SerializeField] private Transform hatTopAnchor;
 
-    /// <summary>Currently equipped assetRef per category (authoritative state from server).</summary>
-    private Dictionary<CosmeticSlot.CosmeticCategory, string> _equippedState
-        = new Dictionary<CosmeticSlot.CosmeticCategory, string>();
-
-    /// <summary>Saved state before a preview so we can restore it.</summary>
-    private Dictionary<CosmeticSlot.CosmeticCategory, string> _previewBaseline;
-
-    /// <summary>Whether we are in preview mode.</summary>
-    private bool _isPreviewing;
-
-    // ── JSON Payload Types ──
+    private readonly List<GameObject> _equippedRoots = new();
+    private readonly List<string> _lastEquippedRefs = new();
 
     [Serializable]
-    private class CosmeticEntry
-    {
-        public string category;
-        public string assetRef;
-    }
-
-    [Serializable]
-    private class LoadCosmeticsPayload
+    private class CosmeticsEnvelope
     {
         public CosmeticEntry[] cosmetics;
     }
 
     [Serializable]
-    private class PreviewPayload
+    private class CosmeticEntry
     {
-        public string category;
         public string assetRef;
+        public string category;
+    }
+
+    [Serializable]
+    private class PreviewEnvelope
+    {
+        public string assetRef;
+        public string category;
         public bool showOnly;
     }
 
-    // ── Lifecycle ──
-
     private void Awake()
     {
-        BuildSlotMap();
+        EnsureAnchors();
     }
 
-    private void BuildSlotMap()
+    private void EnsureAnchors()
     {
-        _slotMap = new Dictionary<CosmeticSlot.CosmeticCategory, CosmeticSlot>();
-        if (slots == null) return;
+        if (headAnchor != null && facewearAnchor != null && hatTopAnchor != null) return;
 
-        foreach (var slot in slots)
+        var driver = HumanoidPoseDriver.FindBestDriveableDriver();
+        Transform headBone = null;
+        if (driver != null)
         {
-            if (slot == null) continue;
-            if (_slotMap.ContainsKey(slot.category))
-            {
-                Debug.LogWarning($"[CosmeticManager] Duplicate slot for category '{slot.category}'. Using first.");
-                continue;
-            }
-            _slotMap[slot.category] = slot;
+            var anim = driver.GetComponent<Animator>();
+            if (anim != null) headBone = anim.GetBoneTransform(HumanBodyBones.Head);
         }
 
-        Debug.Log($"[CosmeticManager] Initialized with {_slotMap.Count} slots.");
+        if (headBone == null)
+        {
+            Debug.LogWarning("[CosmeticManager] No humanoid Head bone — cosmetics cannot attach.");
+            return;
+        }
+
+        headAnchor ??= FindOrCreateAnchor(headBone, "CosmeticAnchor_Head", Vector3.zero, Quaternion.identity);
+        facewearAnchor ??= FindOrCreateAnchor(headBone, "CosmeticAnchor_Face", new Vector3(0f, 0.06f, 0.08f), Quaternion.identity);
+        hatTopAnchor ??= FindOrCreateAnchor(headBone, "CosmeticAnchor_HatTop", new Vector3(0f, 0.11f, 0f), Quaternion.identity);
     }
 
-    // ── Public API (called by FlutterUnityBridge) ──
+    private static Transform FindOrCreateAnchor(Transform headBone, string name, Vector3 localPos, Quaternion localRot)
+    {
+        var existing = headBone.Find(name);
+        if (existing != null) return existing;
+        var go = new GameObject(name);
+        go.transform.SetParent(headBone, false);
+        go.transform.localPosition = localPos;
+        go.transform.localRotation = localRot;
+        go.transform.localScale = Vector3.one;
+        return go.transform;
+    }
 
-    /// <summary>
-    /// Load and apply all equipped cosmetics. Clears any previous cosmetics first.
-    /// Called on app startup and after equip/unequip actions.
-    /// </summary>
-    /// <param name="json">JSON string matching LoadCosmeticsPayload schema.</param>
     public void LoadCosmetics(string json)
     {
-        _isPreviewing = false;
-        _previewBaseline = null;
+        EnsureAnchors();
+        ClearInstances();
 
-        // Clear all slots first
-        ClearAllSlots();
-        _equippedState.Clear();
+        var refs = ParseAssetRefs(json, MaxEquippedCosmetics);
+        _lastEquippedRefs.Clear();
+        _lastEquippedRefs.AddRange(refs);
 
-        if (string.IsNullOrEmpty(json))
-        {
-            Debug.Log("[CosmeticManager] LoadCosmetics: empty payload, default appearance.");
-            SendToFlutter.Send("cosmetics_loaded");
-            return;
-        }
+        foreach (var r in refs)
+            TryAttach(r);
 
-        LoadCosmeticsPayload payload;
-        try
-        {
-            payload = JsonUtility.FromJson<LoadCosmeticsPayload>(json);
-        }
-        catch (Exception ex)
-        {
-            Debug.LogWarning($"[CosmeticManager] LoadCosmetics: failed to parse JSON — {ex.Message}");
-            SendToFlutter.Send("cosmetics_loaded");
-            return;
-        }
-
-        if (payload?.cosmetics == null || payload.cosmetics.Length == 0)
-        {
-            Debug.Log("[CosmeticManager] LoadCosmetics: no cosmetics in payload, default appearance.");
-            SendToFlutter.Send("cosmetics_loaded");
-            return;
-        }
-
-        foreach (var entry in payload.cosmetics)
-        {
-            ApplyCosmeticEntry(entry);
-        }
-
-        Debug.Log($"[CosmeticManager] LoadCosmetics: applied {payload.cosmetics.Length} cosmetic(s).");
         SendToFlutter.Send("cosmetics_loaded");
     }
 
-    /// <summary>
-    /// Temporarily preview a cosmetic item. Saves current state as baseline.
-    /// If showOnly is true, hides all other slots to focus on the preview item.
-    /// </summary>
-    /// <param name="json">JSON string matching PreviewPayload schema.</param>
     public void PreviewCosmetic(string json)
     {
-        if (string.IsNullOrEmpty(json))
-        {
-            Debug.LogWarning("[CosmeticManager] PreviewCosmetic: empty payload.");
-            return;
-        }
+        EnsureAnchors();
+        if (!TryParsePreview(json, out var assetRef)) return;
 
-        PreviewPayload payload;
-        try
-        {
-            payload = JsonUtility.FromJson<PreviewPayload>(json);
-        }
-        catch (Exception ex)
-        {
-            Debug.LogWarning($"[CosmeticManager] PreviewCosmetic: failed to parse JSON — {ex.Message}");
-            return;
-        }
-
-        if (!TryParseCategory(payload.category, out var category))
-        {
-            Debug.LogWarning($"[CosmeticManager] PreviewCosmetic: unknown category '{payload.category}'.");
-            return;
-        }
-
-        // Save baseline on first preview
-        if (!_isPreviewing)
-        {
-            _previewBaseline = new Dictionary<CosmeticSlot.CosmeticCategory, string>(_equippedState);
-            _isPreviewing = true;
-        }
-
-        if (payload.showOnly)
-        {
-            // Hide all slots except the preview category
-            foreach (var kvp in _slotMap)
-            {
-                if (kvp.Key != category)
-                    kvp.Value.ClearSlot();
-            }
-        }
-
-        // Apply the preview cosmetic in its slot
-        if (_slotMap.TryGetValue(category, out var slot))
-        {
-            slot.ClearSlot();
-            LoadAndAttachPrefab(category, payload.assetRef, slot);
-        }
-        else
-        {
-            Debug.LogWarning($"[CosmeticManager] PreviewCosmetic: no slot configured for '{category}'.");
-        }
-
-        Debug.Log($"[CosmeticManager] PreviewCosmetic: previewing '{payload.assetRef}' in slot '{category}' (showOnly={payload.showOnly}).");
+        ClearInstances();
+        TryAttach(assetRef);
         SendToFlutter.Send("cosmetic_preview_ready");
     }
 
-    /// <summary>
-    /// Clear the preview and restore the actual equipped state.
-    /// </summary>
     public void ClearPreview()
     {
-        if (!_isPreviewing || _previewBaseline == null)
-        {
-            Debug.Log("[CosmeticManager] ClearPreview: not in preview mode, nothing to restore.");
-            SendToFlutter.Send("cosmetics_loaded");
-            return;
-        }
-
-        _isPreviewing = false;
-
-        // Clear all slots and re-apply baseline
-        ClearAllSlots();
-        _equippedState.Clear();
-
-        foreach (var kvp in _previewBaseline)
-        {
-            var entry = new CosmeticEntry { category = kvp.Key.ToString(), assetRef = kvp.Value };
-            ApplyCosmeticEntry(entry);
-        }
-
-        _previewBaseline = null;
-
-        Debug.Log("[CosmeticManager] ClearPreview: restored equipped state.");
-        SendToFlutter.Send("cosmetics_loaded");
+        LoadCosmetics(BuildCosmeticsJson(_lastEquippedRefs));
     }
 
-    // ── Internals ──
-
-    private void ApplyCosmeticEntry(CosmeticEntry entry)
+    private static string BuildCosmeticsJson(IReadOnlyList<string> refs)
     {
-        if (entry == null || string.IsNullOrEmpty(entry.category) || string.IsNullOrEmpty(entry.assetRef))
+        var sb = new StringBuilder();
+        sb.Append("{\"cosmetics\":[");
+        for (var i = 0; i < refs.Count; i++)
         {
-            Debug.LogWarning("[CosmeticManager] Skipping null/empty cosmetic entry.");
-            return;
+            if (i > 0) sb.Append(',');
+            sb.Append("{\"assetRef\":\"");
+            sb.Append(EscapeJson(refs[i]));
+            sb.Append("\"}");
         }
+        sb.Append("]}");
+        return sb.ToString();
+    }
 
-        if (!TryParseCategory(entry.category, out var category))
+    private static string EscapeJson(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    private void ClearInstances()
+    {
+        foreach (var go in _equippedRoots)
         {
-            Debug.LogWarning($"[CosmeticManager] Unknown category '{entry.category}', skipping.");
-            return;
+            if (go != null) Destroy(go);
         }
+        _equippedRoots.Clear();
+    }
 
-        if (!_slotMap.TryGetValue(category, out var slot))
+    private static List<string> ParseAssetRefs(string json, int max)
+    {
+        var list = new List<string>();
+        if (string.IsNullOrWhiteSpace(json)) return list;
+        try
         {
-            Debug.LogWarning($"[CosmeticManager] No slot configured for category '{category}', skipping.");
-            return;
+            var env = JsonUtility.FromJson<CosmeticsEnvelope>(json);
+            if (env?.cosmetics == null) return list;
+            foreach (var e in env.cosmetics)
+            {
+                if (e == null || string.IsNullOrWhiteSpace(e.assetRef)) continue;
+                list.Add(e.assetRef.Trim());
+                if (list.Count >= max) break;
+            }
         }
-
-        // Clear existing cosmetic in this slot before applying new one
-        slot.ClearSlot();
-
-        if (LoadAndAttachPrefab(category, entry.assetRef, slot))
+        catch (Exception ex)
         {
-            _equippedState[category] = entry.assetRef;
+            Debug.LogWarning("[CosmeticManager] Parse cosmetics JSON failed: " + ex.Message);
+        }
+        return list;
+    }
+
+    private static bool TryParsePreview(string json, out string assetRef)
+    {
+        assetRef = null;
+        if (string.IsNullOrWhiteSpace(json)) return false;
+        try
+        {
+            var p = JsonUtility.FromJson<PreviewEnvelope>(json);
+            if (p == null || string.IsNullOrWhiteSpace(p.assetRef)) return false;
+            assetRef = p.assetRef.Trim();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("[CosmeticManager] Parse preview JSON failed: " + ex.Message);
+            return false;
         }
     }
 
-    /// <summary>
-    /// Loads a prefab from Resources and attaches it to the slot.
-    /// Prefab path: FlutterEmbed/Cosmetics/CosmeticAssets/{Category}/{assetRef}
-    /// </summary>
-    /// <returns>True if successfully loaded and attached.</returns>
-    private bool LoadAndAttachPrefab(CosmeticSlot.CosmeticCategory category, string assetRef, CosmeticSlot slot)
+    private void TryAttach(string assetRef)
     {
-        string categoryFolder = GetCategoryFolder(category);
-        string resourcePath = $"FlutterEmbed/Cosmetics/CosmeticAssets/{categoryFolder}/{assetRef}";
+        if (string.IsNullOrEmpty(assetRef)) return;
+        if (headAnchor == null || facewearAnchor == null || hatTopAnchor == null) return;
 
-        Debug.Log($"[CosmeticManager] Loading prefab at '{resourcePath}'");
-        var prefab = Resources.Load<GameObject>(resourcePath);
+        var prefab = Resources.Load<GameObject>($"{ResourcesPrefabRoot}/{assetRef}");
         if (prefab == null)
         {
-            Debug.LogWarning($"[CosmeticManager] Prefab NOT FOUND at '{resourcePath}'. " +
-                             $"Check: (1) file exists under Resources/{resourcePath}, " +
-                             $"(2) assetRef casing matches folder name, " +
-                             $"(3) category folder maps correctly (categoryFolder='{categoryFolder}').");
-            return false;
+            Debug.LogWarning($"[CosmeticManager] Missing cosmetic prefab for Resources path '{ResourcesPrefabRoot}/{assetRef}'.");
+            return;
         }
 
-        Debug.Log($"[CosmeticManager] Prefab found '{assetRef}' — instantiating and attaching to slot '{category}'.");
         var instance = Instantiate(prefab);
         instance.name = assetRef;
-
-        if (!slot.AttachCosmetic(instance))
+        var attach = instance.GetComponent<CosmeticAttachment>();
+        if (attach == null)
         {
-            Debug.LogWarning($"[CosmeticManager] AttachCosmetic FAILED for '{assetRef}' in slot '{category}'. " +
-                             $"Check: (1) slot has a valid anchor bone assigned, " +
-                             $"(2) anchor bone exists on the active rig.");
+            Debug.LogWarning($"[CosmeticManager] Prefab '{assetRef}' is missing CosmeticAttachment.");
             Destroy(instance);
-            return false;
+            return;
         }
-
-        Debug.Log($"[CosmeticManager] '{assetRef}' attached successfully to slot '{category}'.");
-        return true;
+        var parent = ResolveParent(attach.anchorKind);
+        instance.transform.SetParent(parent, false);
+        instance.transform.localPosition = Vector3.zero;
+        instance.transform.localRotation = Quaternion.identity;
+        instance.transform.localScale = Vector3.one;
+        _equippedRoots.Add(instance);
     }
 
-    private void ClearAllSlots()
+    private Transform ResolveParent(CosmeticAnchorKind kind)
     {
-        if (_slotMap == null) return;
-        foreach (var kvp in _slotMap)
+        return kind switch
         {
-            kvp.Value.ClearSlot();
-        }
-    }
-
-    private static bool TryParseCategory(string value, out CosmeticSlot.CosmeticCategory category)
-    {
-        if (Enum.TryParse(value, true, out category))
-            return true;
-
-        category = default;
-        return false;
-    }
-
-    /// <summary>
-    /// Maps category enum to the subfolder name under CosmeticAssets/.
-    /// </summary>
-    private static string GetCategoryFolder(CosmeticSlot.CosmeticCategory category)
-    {
-        switch (category)
-        {
-            case CosmeticSlot.CosmeticCategory.HEADWEAR:  return "Headwear";
-            case CosmeticSlot.CosmeticCategory.TOP:       return "Top";
-            case CosmeticSlot.CosmeticCategory.BOTTOM:    return "Bottom";
-            case CosmeticSlot.CosmeticCategory.ACCESSORY: return "Accessory";
-            default: return category.ToString();
-        }
+            CosmeticAnchorKind.Facewear => facewearAnchor != null ? facewearAnchor : headAnchor,
+            CosmeticAnchorKind.HatTop => hatTopAnchor != null ? hatTopAnchor : headAnchor,
+            _ => headAnchor,
+        };
     }
 }
