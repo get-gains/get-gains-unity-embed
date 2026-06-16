@@ -57,7 +57,7 @@ public class HumanoidPoseDriver : MonoBehaviour
 
     /// <summary>Debug: collapse torso to a plane to fix bow-tie / X-shaped hips in 3D (depth mismatch L/R).</summary>
     public PoseLandmarkMapping.TorsoDebugFlattenMode TorsoDebugFlatten { get; set; } =
-        PoseLandmarkMapping.TorsoDebugFlattenMode.UniformZ;
+        PoseLandmarkMapping.TorsoDebugFlattenMode.None;
 
     public PoseLandmarkMapping.TorsoHipDebugInfo LastTorsoHipDebug { get; private set; }
 
