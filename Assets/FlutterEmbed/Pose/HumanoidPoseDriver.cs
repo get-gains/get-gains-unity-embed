@@ -229,7 +229,10 @@ public class HumanoidPoseDriver : MonoBehaviour
     [Tooltip("Max degrees per second the root can rotate to follow inferred body direction. 0 = lock root rotation.")]
     [SerializeField] private float bodyYawMaxSpeed = 120f;
 
-    private float _currentBodyYaw;
+        private Vector3 _initialRootPosition;
+    private Quaternion _initialRootRotation = Quaternion.identity;
+    private Vector3 _initialRootScale = Vector3.one;
+private float _currentBodyYaw;
     private readonly Dictionary<string, Vector3> _modelLocalPos = new Dictionary<string, Vector3>();
 
     // Local-space bind frames so retargeting works correctly as the root yaw changes.
@@ -244,7 +247,8 @@ public class HumanoidPoseDriver : MonoBehaviour
     private Quaternion _bindHeadModelLocalRot = Quaternion.identity;
     private Quaternion _bindNeckModelLocalRot = Quaternion.identity;
     private Quaternion _bindHeadLocalToNeckLocal = Quaternion.identity;
-    private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
+        private Quaternion _bindSpine004WorldRot = Quaternion.identity;
+private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
 
     public Vector3 FigureCenter => _figureCenter;
     public float FigureHeight => _figureHeight;
@@ -334,6 +338,9 @@ public class HumanoidPoseDriver : MonoBehaviour
         }
 
         _rootTransform = animator.transform;
+        _initialRootPosition = _rootTransform.position;
+        _initialRootRotation = _rootTransform.rotation;
+        _initialRootScale = _rootTransform.localScale;
         _hips = animator.GetBoneTransform(HumanBodyBones.Hips);
         _neck = animator.GetBoneTransform(HumanBodyBones.Neck);
         _head = animator.GetBoneTransform(HumanBodyBones.Head);
@@ -411,8 +418,8 @@ public class HumanoidPoseDriver : MonoBehaviour
         }
 
         _ready = _bones.Count > 0;
-        _targetRootPosition = _rootTransform.position;
-        _targetScale = _rootTransform.localScale.x;
+        _targetRootPosition = _initialRootPosition;
+        _targetScale = _initialRootScale.x;
         if (_ready)
             Debug.Log(
                 $"[HumanoidPoseDriver] Ready: {_bones.Count} bones, bindHeight={_bindHeight:F3}, smooth={smoothSpeed}, spineBlend={spineBlend}, limbBlend={limbBlend} on '{gameObject.name}'");
@@ -855,7 +862,10 @@ public class HumanoidPoseDriver : MonoBehaviour
         }
 
         if (_spine004 != null && _head != null)
+        {
+            _bindSpine004WorldRot = _spine004.rotation;
             _bindHeadLocalToSpine004Local = Quaternion.Inverse(_spine004.localRotation) * _head.localRotation;
+        }
 
         // Build a stable bind frame for head orientation.
         Vector3 up = _rootTransform.up;
@@ -916,7 +926,41 @@ public class HumanoidPoseDriver : MonoBehaviour
             _spine004 = animator.GetBoneTransform(HumanBodyBones.Chest) ?? animator.GetBoneTransform(HumanBodyBones.Spine);
     }
 
-    private void RefreshSpineFaceAnchorBindOffsets()
+        /// <summary>
+    /// Snaps the rig back to its initial bind pose and clears runtime smoothing state.
+    /// Call before loading a new set of recorded landmarks so leftover limb positions
+    /// (e.g. legs from the previous form) don't bleed into the next playback.
+    /// </summary>
+    public void ResetPose()
+    {
+        if (!_ready) return;
+
+        if (_rootTransform != null)
+        {
+            _rootTransform.position = _initialRootPosition;
+            _rootTransform.rotation = _initialRootRotation;
+            _rootTransform.localScale = _initialRootScale;
+        }
+
+        if (_hips != null)
+            _hips.localPosition = _bindHipsLocalPos;
+
+        foreach (var rb in _bones)
+        {
+            if (rb.Bone == null) continue;
+            rb.Bone.rotation = rb.BindWorldRot;
+        }
+
+        if (_spine004 != null)
+            _spine004.rotation = _bindSpine004WorldRot;
+
+        _currentBodyYaw = 0f;
+        _headForwardSmoothed = Vector3.zero;
+        _targetRootPosition = _initialRootPosition;
+        _targetScale = _initialRootScale.x;
+    }
+
+private void RefreshSpineFaceAnchorBindOffsets()
     {
         _bindNeckLocalToSpine004 = Quaternion.identity;
         _bindHeadLocalToSpine004 = Quaternion.identity;
