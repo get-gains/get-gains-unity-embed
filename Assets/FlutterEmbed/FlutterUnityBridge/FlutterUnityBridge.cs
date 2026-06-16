@@ -339,7 +339,8 @@ public class FlutterUnityBridge : MonoBehaviour
             case "REAR":           offset = new Vector3(0, 0, distance); break;
             case "ANGLE_45_LEFT":  offset = Quaternion.Euler(0, 45, 0) * new Vector3(0, 0, -distance); break;
             case "ANGLE_45_RIGHT": offset = Quaternion.Euler(0, -45, 0) * new Vector3(0, 0, -distance); break;
-            default:               offset = new Vector3(0, 0, -distance); break;
+            case "DIAGONAL":
+            default:               offset = Quaternion.Euler(15, -135, 0) * new Vector3(0, 0, -distance); break;
         }
 
         poseCamera.transform.position = target + offset;
