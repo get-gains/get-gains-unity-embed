@@ -201,9 +201,9 @@ public class CosmeticManager : MonoBehaviour
         }
         var parent = ResolveParent(attach.anchorKind);
         instance.transform.SetParent(parent, false);
-        instance.transform.localPosition = Vector3.zero;
-        instance.transform.localRotation = Quaternion.identity;
-        instance.transform.localScale = Vector3.one;
+        instance.transform.localPosition = attach.localOffset;
+        instance.transform.localRotation = attach.localRotation;
+        instance.transform.localScale = attach.localScale;
         _equippedRoots.Add(instance);
     }
 
