@@ -14,9 +14,8 @@ public enum CameraViewMode { Workout, Cosmetic }
 ///
 /// View modes:
 ///   Workout  – full-figure framing (height multiplier 0.70), maxDistance 20 m.
-///   Cosmetic – upper-body framing (height multiplier 0.40), maxDistance 6 m.
-///
-/// Both modes default to a 45° diagonal, 15° pitch view so the model has depth on every screen.
+///   Cosmetic – upper-body framing (height multiplier 0.40), maxDistance 6 m,
+///              resets to front-facing yaw and slight downward pitch for accessory inspection.
 /// </summary>
 public class OrbitCameraController : MonoBehaviour
 {
@@ -48,16 +47,15 @@ public class OrbitCameraController : MonoBehaviour
 
     private const float CosmeticHeightMultiplier = 0.40f;
     private const float CosmeticMaxDistance      = 6f;
-
-    private const float DefaultYaw               = -135f; // front-right diagonal start (model faces +Z)
-    private const float DefaultPitch             = 15f;   // slight downward angle
+    private const float CosmeticDefaultPitch     = 8f;   // slight downward angle for face
+    private const float CosmeticDefaultYaw       = 0f;   // front-facing
 
     // ── State ────────────────────────────────────────────────────────────────
 
     private Camera _cam;
     private Vector3 _target;
-    private float _yaw = DefaultYaw;
-    private float _pitch = DefaultPitch;
+    private float _yaw;
+    private float _pitch = 5f;
     private float _distance = 5f;
 
     private float _yawVel, _pitchVel, _distVel;
@@ -90,11 +88,13 @@ public class OrbitCameraController : MonoBehaviour
         _viewMode = mode;
         maxDistance = mode == CameraViewMode.Cosmetic ? CosmeticMaxDistance : WorkoutMaxDistance;
 
-        // Reset to the shared diagonal default on every mode switch.
-        _yaw         = DefaultYaw;
-        _targetYaw   = DefaultYaw;
-        _pitch       = DefaultPitch;
-        _targetPitch = DefaultPitch;
+        if (mode == CameraViewMode.Cosmetic)
+        {
+            _yaw         = CosmeticDefaultYaw;
+            _targetYaw   = CosmeticDefaultYaw;
+            _pitch       = CosmeticDefaultPitch;
+            _targetPitch = CosmeticDefaultPitch;
+        }
 
         // Clamp current target distance to the new limit.
         _targetDist = Mathf.Clamp(_targetDist, minDistance, maxDistance);
@@ -123,13 +123,9 @@ public class OrbitCameraController : MonoBehaviour
             float idealDist = (figureHeight * mult) / Mathf.Tan(_cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
             _distance = Mathf.Clamp(idealDist, minDistance, maxDistance);
         }
-
-        // Every reframe resets to the diagonal default so all screens start from the same 3/4 view.
-        _yaw         = DefaultYaw;
-        _pitch       = DefaultPitch;
-        _targetYaw   = DefaultYaw;
-        _targetPitch = DefaultPitch;
         _targetDist  = _distance;
+        _targetYaw   = _yaw;
+        _targetPitch = _pitch;
         _initialized = true;
         ApplyImmediate();
     }
@@ -144,7 +140,6 @@ public class OrbitCameraController : MonoBehaviour
             case "REAR":           _targetYaw = 180f;  _targetPitch = 5f; break;
             case "ANGLE_45_LEFT":  _targetYaw =  45f;  _targetPitch = 5f; break;
             case "ANGLE_45_RIGHT": _targetYaw = -45f;  _targetPitch = 5f; break;
-            case "DIAGONAL":       _targetYaw = -135f; _targetPitch = 15f; break;
             default: return;
         }
         _yaw   = _targetYaw;

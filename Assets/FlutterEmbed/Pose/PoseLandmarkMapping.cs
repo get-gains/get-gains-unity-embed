@@ -235,65 +235,11 @@ public static class PoseLandmarkMapping
     }
 
     /// <summary>
-    /// Computes a stable body forward vector from torso landmarks.
-    /// Returns false if no usable shoulder/hip frame.
-    /// Forward points in the direction the chest/face is facing (toward the camera for a front view).
-    /// </summary>
-    /// <param name="worldPos">Mapped landmark positions in world/pose space.</param>
-    /// <param name="forward">Output unit forward vector.</param>
-    public static bool TryComputeBodyForward(IReadOnlyDictionary<string, Vector3> worldPos, out Vector3 forward)
-    {
-        forward = default;
-        if (worldPos == null || worldPos.Count == 0) return false;
-
-        if (!worldPos.TryGetValue("MID_SHOULDER", out Vector3 midShoulder))
-        {
-            if (worldPos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) &&
-                worldPos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs))
-                midShoulder = 0.5f * (ls + rs);
-            else
-                return false;
-        }
-
-        if (!worldPos.TryGetValue("MID_HIP", out Vector3 midHip))
-        {
-            if (worldPos.TryGetValue("LEFT_HIP", out Vector3 lh) &&
-                worldPos.TryGetValue("RIGHT_HIP", out Vector3 rh))
-                midHip = 0.5f * (lh + rh);
-            else
-                return false;
-        }
-
-        Vector3 spineUp = midShoulder - midHip;
-        if (spineUp.sqrMagnitude < 1e-10f) return false;
-        spineUp.Normalize();
-
-        float torsoLen = Vector3.Distance(midHip, midShoulder);
-        float minSpan = Mathf.Max(torsoLen * 0.09f, 0.01f);
-        if (!TryGetStableShoulderHorizontal(worldPos, spineUp, minSpan, out Vector3 shoulderHoriz, out _))
-            return false;
-
-        forward = Vector3.Cross(shoulderHoriz, spineUp);
-        if (forward.sqrMagnitude < 1e-10f) return false;
-        forward.Normalize();
-
-        // Nose should be in front of this forward; if not, flip.
-        if (worldPos.TryGetValue("NOSE", out Vector3 nose))
-        {
-            Vector3 rawNoseDir = nose - midShoulder;
-            if (rawNoseDir.sqrMagnitude > 1e-10f && Vector3.Dot(forward, rawNoseDir) < 0f)
-                forward = -forward;
-        }
-
-        return true;
-    }
-
-    /// <summary>
     /// Left–right in the shoulder girdle, stable in side view: project shoulder line onto plane ⊥ spine,
     /// fall back to projected hip line, then a geometry-only axis so normalization does not chase depth noise.
     /// </summary>
-    public static bool TryGetStableShoulderHorizontal(
-        IReadOnlyDictionary<string, Vector3> worldPos,
+    private static bool TryGetStableShoulderHorizontal(
+        Dictionary<string, Vector3> worldPos,
         Vector3 spineUpUnit,
         float minSpan,
         out Vector3 shoulderHorizUnit,

@@ -41,6 +41,8 @@ public class HumanoidPoseDriver : MonoBehaviour
     [SerializeField] private bool flipLimbForwardZ = true;
     [Tooltip("Drive neck/head from HEAD_CENTER so skull follows face, not anchored.")]
     [SerializeField] private bool driveHead = true;
+    [Tooltip("Flip head/neck Z if face points backwards relative to camera.")]
+    [SerializeField] private bool invertHeadZ = false;
     [Tooltip("MLKit z is not 0-1; divide raw z by this so depth stays sensible (e.g. 100).")]
 #pragma warning disable CS0414
     [SerializeField] private float zNormalizeScale = 100f;
@@ -57,7 +59,7 @@ public class HumanoidPoseDriver : MonoBehaviour
 
     /// <summary>Debug: collapse torso to a plane to fix bow-tie / X-shaped hips in 3D (depth mismatch L/R).</summary>
     public PoseLandmarkMapping.TorsoDebugFlattenMode TorsoDebugFlatten { get; set; } =
-        PoseLandmarkMapping.TorsoDebugFlattenMode.None;
+        PoseLandmarkMapping.TorsoDebugFlattenMode.UniformZ;
 
     public PoseLandmarkMapping.TorsoHipDebugInfo LastTorsoHipDebug { get; private set; }
 
@@ -162,8 +164,6 @@ public class HumanoidPoseDriver : MonoBehaviour
         public string To;
         public Vector3 BindLocalDir;
         public Quaternion BindLocalRot;
-        /// <summary>Bind rotation expressed in the model root's local frame.</summary>
-        public Quaternion BindModelLocalRot;
         /// <summary>World rotation in bind pose (reference for delta rotation, ganeshsar-style).</summary>
         public Quaternion BindWorldRot;
         /// <summary>World-space direction from bone to child in bind pose.</summary>
@@ -176,9 +176,6 @@ public class HumanoidPoseDriver : MonoBehaviour
     {
         public Transform Bone;
         public Quaternion BindWorldRot;
-        public Quaternion BindLocalRot;
-        /// <summary>Bind rotation expressed in the model root's local frame.</summary>
-        public Quaternion BindModelLocalRot;
         public float Weight;
     }
 
@@ -222,33 +219,7 @@ public class HumanoidPoseDriver : MonoBehaviour
     private Quaternion _bindHeadLocalToNeck = Quaternion.identity;
     private Quaternion _bindNeckLocalToSpine004 = Quaternion.identity;
     private Quaternion _bindHeadLocalToSpine004 = Quaternion.identity;
-    private Quaternion _bindNeckLocalToSpine004Local = Quaternion.identity;
     private bool _loggedSpineFaceAnchorMissing;
-
-    [Header("Body direction")]
-    [Tooltip("Max degrees per second the root can rotate to follow inferred body direction. 0 = lock root rotation.")]
-    [SerializeField] private float bodyYawMaxSpeed = 120f;
-
-        private Vector3 _initialRootPosition;
-    private Quaternion _initialRootRotation = Quaternion.identity;
-    private Vector3 _initialRootScale = Vector3.one;
-private float _currentBodyYaw;
-    private readonly Dictionary<string, Vector3> _modelLocalPos = new Dictionary<string, Vector3>();
-
-    // Local-space bind frames so retargeting works correctly as the root yaw changes.
-    private Quaternion _bindTorsoFrameLocal = Quaternion.identity;
-    private Vector3 _bindTorsoUpLocal;
-    private Vector3 _bindTorsoRightLocal;
-    private Vector3 _bindTorsoForwardLocal;
-
-    private Quaternion _bindHeadFrameLocal = Quaternion.identity;
-    private Quaternion _bindHeadLocalRot = Quaternion.identity;
-    private Quaternion _bindNeckLocalRot = Quaternion.identity;
-    private Quaternion _bindHeadModelLocalRot = Quaternion.identity;
-    private Quaternion _bindNeckModelLocalRot = Quaternion.identity;
-    private Quaternion _bindHeadLocalToNeckLocal = Quaternion.identity;
-        private Quaternion _bindSpine004WorldRot = Quaternion.identity;
-private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
 
     public Vector3 FigureCenter => _figureCenter;
     public float FigureHeight => _figureHeight;
@@ -331,16 +302,13 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             {
                 Debug.LogError(
                     "[HumanoidPoseDriver] Avatar must be **Humanoid** (Rig tab in FBX import settings). "
-                    + "Generic rigs cannot use Humanoid retargeting — the cyan stick figure will show instead.");
+                    + "Generic rigs cannot use HumanBodyBones retargeting — the cyan stick figure will show instead.");
                 _loggedHumanoidWarning = true;
             }
             return false;
         }
 
         _rootTransform = animator.transform;
-        _initialRootPosition = _rootTransform.position;
-        _initialRootRotation = _rootTransform.rotation;
-        _initialRootScale = _rootTransform.localScale;
         _hips = animator.GetBoneTransform(HumanBodyBones.Hips);
         _neck = animator.GetBoneTransform(HumanBodyBones.Neck);
         _head = animator.GetBoneTransform(HumanBodyBones.Head);
@@ -393,11 +361,6 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             bindWorldDir.Normalize();
             Quaternion bindWorldRot = bone.rotation;
 
-            // Direction and orientation in the model's root-local frame so we can solve bones after the body yaw is applied.
-            Quaternion invRoot = _rootTransform != null ? Quaternion.Inverse(_rootTransform.rotation) : Quaternion.identity;
-            Vector3 bindDirModelLocal = invRoot * bindWorldDir;
-            Quaternion bindRotModelLocal = invRoot * bindWorldRot;
-
             bool isHips = m.From == "MID_HIP" && m.To == "MID_SHOULDER";
             bool isNeck = (m.From == "MID_SHOULDER" && m.To == "NECK_VIRTUAL") ||
                           (m.From == "NECK_VIRTUAL" && m.To == "NOSE");
@@ -408,8 +371,7 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
                 Bone = bone,
                 From = m.From,
                 To = m.To,
-                BindLocalDir = bindDirModelLocal,
-                BindModelLocalRot = bindRotModelLocal,
+                BindLocalDir = localDir,
                 BindLocalRot = bone.localRotation,
                 BindWorldRot = bindWorldRot,
                 BindWorldDir = bindWorldDir,
@@ -418,8 +380,8 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
         }
 
         _ready = _bones.Count > 0;
-        _targetRootPosition = _initialRootPosition;
-        _targetScale = _initialRootScale.x;
+        _targetRootPosition = _rootTransform.position;
+        _targetScale = _rootTransform.localScale.x;
         if (_ready)
             Debug.Log(
                 $"[HumanoidPoseDriver] Ready: {_bones.Count} bones, bindHeight={_bindHeight:F3}, smooth={smoothSpeed}, spineBlend={spineBlend}, limbBlend={limbBlend} on '{gameObject.name}'");
@@ -444,22 +406,15 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
         if (_hips != null)
             _hips.localPosition = _bindHipsLocalPos;
 
-        // Rotate root so the model faces the inferred body direction.
-        float targetYaw = ComputeBodyYaw();
-        float maxDelta = bodyYawMaxSpeed * Time.deltaTime;
-        _currentBodyYaw = Mathf.MoveTowardsAngle(_currentBodyYaw, targetYaw, maxDelta);
-        if (_rootTransform != null)
-            _rootTransform.rotation = Quaternion.Euler(0f, _currentBodyYaw, 0f);
-
-        // Root scale (smoothed)
+        // Root scale and position (smoothed)
         float scale = (_bindHeight > 0.01f && _figureHeight > 0.1f)
             ? Mathf.Clamp(_figureHeight / _bindHeight, 0.85f, 1.15f)
             : 1f;
         _targetScale = scale;
-        if (_rootTransform != null)
-            _rootTransform.localScale = Vector3.one * Mathf.Lerp(_rootTransform.localScale.x, _targetScale, Time.deltaTime * smoothSpeed);
+        _rootTransform.localScale = Vector3.one * Mathf.Lerp(_rootTransform.localScale.x, _targetScale, Time.deltaTime * smoothSpeed);
 
-        // Root translation: when torso kinematics are enabled, the endpoint solve handles it.
+        // When torso kinematics are enabled, root translation is handled by the kinematic solve
+        // to better satisfy both hip and shoulder endpoints.
         if (!useTorsoKinematics && _hips != null && _pos.TryGetValue("MID_HIP", out Vector3 midHip))
         {
             Vector3 hipsWorld = _hips.position;
@@ -471,63 +426,70 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             _rootTransform.position = Vector3.Lerp(_rootTransform.position, _targetRootPosition, Time.deltaTime * smoothSpeed);
         }
 
-        // Solve in model-local space after root yaw/position are set so bone math is independent of body direction.
-        BuildModelLocalPositions();
-
         if (useTorsoKinematics)
-        {
             ApplyTorsoKinematics();
-            ApplyTorsoEndpointTranslation();
-        }
 
-        ApplyLimbRotationsModelLocal();
+        // Per-bone: target rotation from bind reference (ganeshsar-style), then smooth (MediaPipe-style Slerp)
+        bool isArmBone(string from, string to) =>
+            (from.Contains("SHOULDER") && to.Contains("ELBOW")) || (from.Contains("ELBOW") && to.Contains("WRIST"));
+        bool isLimbBone(string from, string to) =>
+            isArmBone(from, to) ||
+            (from.Contains("HIP") && to.Contains("KNEE")) || (from.Contains("KNEE") && (to.Contains("ANKLE") || to.Contains("FOOT")));
 
-        if (driveHead)
-            ApplyHeadFromTorsoAndFaceModelLocal();
-    }
-
-    /// <summary>
-    /// Infers the Y-axis rotation that aligns the model's bind forward with the person's body forward.
-    /// Falls back to the current yaw if no reliable forward vector is available.
-    /// </summary>
-    private float ComputeBodyYaw()
-    {
-        Vector3 forward = Vector3.zero;
-        bool hasForward = false;
-
-        // Prefer the already-smoothed head forward if it was computed this frame.
-        if (_headForwardSmoothed.sqrMagnitude > 1e-6f)
+        foreach (var rb in _bones)
         {
-            forward = _headForwardSmoothed;
-            hasForward = true;
+            if (rb.Bone == null) continue;
+            if (useTorsoKinematics && IsTorsoDrivenBone(rb.Bone)) continue;
+            if (!_pos.TryGetValue(rb.From, out Vector3 from)) continue;
+            if (!_pos.TryGetValue(rb.To, out Vector3 to)) continue;
+
+            bool isNeck = (rb.From == "MID_SHOULDER" && rb.To == "NECK_VIRTUAL") ||
+                          (rb.From == "NECK_VIRTUAL" && rb.To == "NOSE");
+            if (isNeck && !driveHead) continue; // allow disabling head driving if it misbehaves
+
+            bool isArm = isArmBone(rb.From, rb.To);
+            if (isArm && _confidence.TryGetValue(rb.From, out float cf) && _confidence.TryGetValue(rb.To, out float ct))
+            {
+                if (cf < 0.4f || ct < 0.4f) continue;
+            }
+
+            bool isHips = rb.From == "MID_HIP" && rb.To == "MID_SHOULDER";
+            bool flatten = flattenDirectionsToXY && isHips;
+
+            Vector3 targetDir = to - from;
+            if (flatten) targetDir.z = 0f;
+
+            // Flip limbs forward/back in Z for arms/legs only; neck uses its own invertHeadZ flag.
+            if (flipLimbForwardZ && isLimbBone(rb.From, rb.To) && !isNeck)
+                targetDir.z = -targetDir.z;
+
+            if (invertHeadZ && isNeck)
+                targetDir.z = -targetDir.z;
+
+            if (targetDir.sqrMagnitude < 1e-6f) continue; // zero-length segment, skip
+            targetDir.Normalize();
+
+            // Pose space: +Z = person toward camera (front). Transform to world so rig forward matches (arms in front, not behind).
+            Vector3 targetDirWorld = _rootTransform != null ? _rootTransform.TransformDirection(targetDir) : targetDir;
+            targetDirWorld.Normalize();
+
+            // Avoid unstable 180° flip when bind and target are opposite (humanoid sanity)
+            if (Vector3.Dot(rb.BindWorldDir, targetDirWorld) < -0.999f) continue;
+
+            // Delta from bind reference (ganeshsar: deltaRotTracked * initialRotation)
+            Quaternion correction = Quaternion.FromToRotation(rb.BindWorldDir, targetDirWorld);
+            correction = Quaternion.Slerp(Quaternion.identity, correction, rb.Blend);
+
+            if (maxRotationPerFrame < 180f)
+            {
+                float angle = Quaternion.Angle(Quaternion.identity, correction);
+                if (angle > maxRotationPerFrame && angle > 0.01f)
+                    correction = Quaternion.Slerp(Quaternion.identity, correction, maxRotationPerFrame / angle);
+            }
+
+            Quaternion targetWorldRot = correction * rb.BindWorldRot;
+            rb.Bone.rotation = Quaternion.Slerp(rb.Bone.rotation, targetWorldRot, Time.deltaTime * smoothSpeed);
         }
-        else if (PoseLandmarkMapping.TryComputeBodyForward(_pos, out Vector3 torsoForward))
-        {
-            forward = torsoForward;
-            hasForward = true;
-        }
-
-        if (!hasForward) return _currentBodyYaw;
-
-        Vector3 forwardXZ = Vector3.ProjectOnPlane(forward, Vector3.up).normalized;
-        if (forwardXZ.sqrMagnitude < 1e-6f) return _currentBodyYaw;
-
-        return Mathf.Atan2(forwardXZ.x, forwardXZ.z) * Mathf.Rad2Deg;
-    }
-
-    /// <summary>
-    /// Re-expresses all mapped landmark positions in the model's local frame so bone solving
-    /// is independent of the root yaw.
-    /// </summary>
-    private void BuildModelLocalPositions()
-    {
-        _modelLocalPos.Clear();
-        if (_rootTransform == null) return;
-
-        Quaternion invRoot = Quaternion.Inverse(_rootTransform.rotation);
-        Vector3 rootPos = _rootTransform.position;
-        foreach (var kvp in _pos)
-            _modelLocalPos[kvp.Key] = invRoot * (kvp.Value - rootPos);
     }
 
     /// <summary>Call after LoadFrames or Seek to snap toward current pose (optional).</summary>
@@ -675,7 +637,6 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
         int n = chain.Count;
         if (n == 0) return;
 
-        Quaternion invRoot = _rootTransform != null ? Quaternion.Inverse(_rootTransform.rotation) : Quaternion.identity;
         for (int i = 0; i < n; i++)
         {
             float w = GetHumanLikeTorsoWeight(chain[i], n == 1 ? i : i / (float)(n - 1));
@@ -683,8 +644,6 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             {
                 Bone = chain[i],
                 BindWorldRot = chain[i].rotation,
-                BindModelLocalRot = invRoot * chain[i].rotation,
-                BindLocalRot = chain[i].localRotation,
                 Weight = w,
             });
         }
@@ -702,12 +661,6 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             Vector3 bindForward = Vector3.Cross(bindRight, bindUp).normalized;
             if (bindForward.sqrMagnitude < 1e-6f) bindForward = _rootTransform.forward;
             _bindTorsoFrame = Quaternion.LookRotation(bindForward, bindUp);
-
-            invRoot = Quaternion.Inverse(_rootTransform.rotation);
-            _bindTorsoUpLocal = invRoot * bindUp;
-            _bindTorsoRightLocal = invRoot * bindRight;
-            _bindTorsoForwardLocal = invRoot * bindForward;
-            _bindTorsoFrameLocal = Quaternion.LookRotation(_bindTorsoForwardLocal, _bindTorsoUpLocal);
         }
     }
 
@@ -733,10 +686,10 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
     private void ApplyTorsoKinematics()
     {
         if (_torsoBones.Count == 0 || _rootTransform == null) return;
-        if (!_modelLocalPos.TryGetValue("LEFT_SHOULDER", out Vector3 lShoulder)) return;
-        if (!_modelLocalPos.TryGetValue("RIGHT_SHOULDER", out Vector3 rShoulder)) return;
-        if (!_modelLocalPos.TryGetValue("LEFT_HIP", out Vector3 lHip)) return;
-        if (!_modelLocalPos.TryGetValue("RIGHT_HIP", out Vector3 rHip)) return;
+        if (!_pos.TryGetValue("LEFT_SHOULDER", out Vector3 lShoulder)) return;
+        if (!_pos.TryGetValue("RIGHT_SHOULDER", out Vector3 rShoulder)) return;
+        if (!_pos.TryGetValue("LEFT_HIP", out Vector3 lHip)) return;
+        if (!_pos.TryGetValue("RIGHT_HIP", out Vector3 rHip)) return;
 
         Vector3 midShoulder = 0.5f * (lShoulder + rShoulder);
         Vector3 midHip = 0.5f * (lHip + rHip);
@@ -749,8 +702,10 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
         Vector3 torsoForwardLocal = Vector3.Cross(torsoRightLocal, torsoUpLocal).normalized;
         if (torsoForwardLocal.sqrMagnitude < 1e-6f) return;
 
-        Quaternion targetTorsoFrameLocal = Quaternion.LookRotation(torsoForwardLocal, torsoUpLocal);
-        Quaternion torsoCorrection = targetTorsoFrameLocal * Quaternion.Inverse(_bindTorsoFrameLocal);
+        Vector3 torsoUpWorld = _rootTransform.TransformDirection(torsoUpLocal).normalized;
+        Vector3 torsoForwardWorld = _rootTransform.TransformDirection(torsoForwardLocal).normalized;
+        Quaternion targetTorsoFrame = Quaternion.LookRotation(torsoForwardWorld, torsoUpWorld);
+        Quaternion torsoCorrection = targetTorsoFrame * Quaternion.Inverse(_bindTorsoFrame);
         torsoCorrection = Quaternion.Slerp(Quaternion.identity, torsoCorrection, torsoKinematicBlend);
 
         for (int i = 0; i < _torsoBones.Count; i++)
@@ -769,64 +724,15 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
                     weightedCorrection = Quaternion.Slerp(Quaternion.identity, weightedCorrection, maxRotationPerFrame / angle);
             }
 
-            Quaternion targetLocalRot = weightedCorrection * tb.BindModelLocalRot;
-            tb.Bone.rotation = Quaternion.Slerp(tb.Bone.rotation, _rootTransform.rotation * targetLocalRot, Time.deltaTime * smoothSpeed);
+            Quaternion targetWorldRot = weightedCorrection * tb.BindWorldRot;
+            tb.Bone.rotation = Quaternion.Slerp(tb.Bone.rotation, targetWorldRot, Time.deltaTime * smoothSpeed);
         }
-    }
 
-    /// <summary>
-    /// Rotates arms/legs in model-local space. The root yaw has already been applied,
-    /// so no per-bone Z flips are needed.
-    /// </summary>
-    /// <summary>
-    /// Rotates arms/legs in model-local space. The root yaw has already been applied,
-    /// so no per-bone Z flips are needed.
-    /// </summary>
-    private void ApplyLimbRotationsModelLocal()
-    {
-        bool isArmBone(string from, string to) =>
-            (from.Contains("SHOULDER") && to.Contains("ELBOW")) || (from.Contains("ELBOW") && to.Contains("WRIST"));
+        ApplyTorsoEndpointTranslation();
 
-        foreach (var rb in _bones)
-        {
-            if (rb.Bone == null) continue;
-            if (useTorsoKinematics && IsTorsoDrivenBone(rb.Bone)) continue;
-
-            // Head/neck are handled by ApplyHeadFromTorsoAndFaceModelLocal when driveHead is enabled.
-            bool isNeck = (rb.From == "MID_SHOULDER" && rb.To == "NECK_VIRTUAL") ||
-                          (rb.From == "NECK_VIRTUAL" && rb.To == "NOSE");
-            if (isNeck) continue;
-
-            if (!_modelLocalPos.TryGetValue(rb.From, out Vector3 from)) continue;
-            if (!_modelLocalPos.TryGetValue(rb.To, out Vector3 to)) continue;
-
-            bool isArm = isArmBone(rb.From, rb.To);
-            if (isArm && _confidence.TryGetValue(rb.From, out float cf) && _confidence.TryGetValue(rb.To, out float ct))
-            {
-                if (cf < 0.4f || ct < 0.4f) continue;
-            }
-
-            Vector3 targetDir = to - from;
-            if (targetDir.sqrMagnitude < 1e-6f) continue;
-            targetDir.Normalize();
-
-            // Avoid unstable 180° flip when bind and target are opposite.
-            if (Vector3.Dot(rb.BindLocalDir, targetDir) < -0.999f) continue;
-
-            Quaternion correction = Quaternion.FromToRotation(rb.BindLocalDir, targetDir);
-            correction = Quaternion.Slerp(Quaternion.identity, correction, rb.Blend);
-
-            if (maxRotationPerFrame < 180f)
-            {
-                float angle = Quaternion.Angle(Quaternion.identity, correction);
-                if (angle > maxRotationPerFrame && angle > 0.01f)
-                    correction = Quaternion.Slerp(Quaternion.identity, correction, maxRotationPerFrame / angle);
-            }
-
-            Quaternion targetLocalRot = correction * rb.BindModelLocalRot;
-            Quaternion targetWorldRot = _rootTransform.rotation * targetLocalRot;
-            rb.Bone.rotation = Quaternion.Slerp(rb.Bone.rotation, targetWorldRot, Time.deltaTime * smoothSpeed);
-        }
+        // Use torso frame + face landmarks to rotate the back of the skull toward the face.
+        if (driveHead)
+            ApplyHeadFromTorsoAndFace(torsoUpWorld);
     }
 
     private bool IsTorsoDrivenBone(Transform bone)
@@ -844,28 +750,8 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             return;
 
         _bindHeadWorldRot = _head.rotation;
-        _bindHeadLocalRot = _head.localRotation;
-        Quaternion invRoot = Quaternion.Inverse(_rootTransform.rotation);
-        _bindHeadModelLocalRot = invRoot * _bindHeadWorldRot;
         if (_neck != null)
-        {
             _bindHeadLocalToNeck = Quaternion.Inverse(_neck.rotation) * _head.rotation;
-            _bindNeckLocalRot = _neck.localRotation;
-            _bindNeckModelLocalRot = invRoot * _neck.rotation;
-            _bindHeadLocalToNeckLocal = Quaternion.Inverse(_neck.localRotation) * _head.localRotation;
-        }
-        else
-        {
-            _bindHeadLocalToNeck = Quaternion.identity;
-            _bindHeadLocalToNeckLocal = Quaternion.identity;
-            _bindNeckModelLocalRot = Quaternion.identity;
-        }
-
-        if (_spine004 != null && _head != null)
-        {
-            _bindSpine004WorldRot = _spine004.rotation;
-            _bindHeadLocalToSpine004Local = Quaternion.Inverse(_spine004.localRotation) * _head.localRotation;
-        }
 
         // Build a stable bind frame for head orientation.
         Vector3 up = _rootTransform.up;
@@ -882,8 +768,6 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             forward = _rootTransform.forward;
 
         _bindHeadFrame = Quaternion.LookRotation(forward, up);
-
-        _bindHeadFrameLocal = Quaternion.LookRotation(invRoot * forward, invRoot * up);
     }
 
     /// <summary>Find the transform that should carry back-of-head + face (often DEF-spine.004 or humanoid Chest).</summary>
@@ -926,41 +810,7 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             _spine004 = animator.GetBoneTransform(HumanBodyBones.Chest) ?? animator.GetBoneTransform(HumanBodyBones.Spine);
     }
 
-        /// <summary>
-    /// Snaps the rig back to its initial bind pose and clears runtime smoothing state.
-    /// Call before loading a new set of recorded landmarks so leftover limb positions
-    /// (e.g. legs from the previous form) don't bleed into the next playback.
-    /// </summary>
-    public void ResetPose()
-    {
-        if (!_ready) return;
-
-        if (_rootTransform != null)
-        {
-            _rootTransform.position = _initialRootPosition;
-            _rootTransform.rotation = _initialRootRotation;
-            _rootTransform.localScale = _initialRootScale;
-        }
-
-        if (_hips != null)
-            _hips.localPosition = _bindHipsLocalPos;
-
-        foreach (var rb in _bones)
-        {
-            if (rb.Bone == null) continue;
-            rb.Bone.rotation = rb.BindWorldRot;
-        }
-
-        if (_spine004 != null)
-            _spine004.rotation = _bindSpine004WorldRot;
-
-        _currentBodyYaw = 0f;
-        _headForwardSmoothed = Vector3.zero;
-        _targetRootPosition = _initialRootPosition;
-        _targetScale = _initialRootScale.x;
-    }
-
-private void RefreshSpineFaceAnchorBindOffsets()
+    private void RefreshSpineFaceAnchorBindOffsets()
     {
         _bindNeckLocalToSpine004 = Quaternion.identity;
         _bindHeadLocalToSpine004 = Quaternion.identity;
@@ -968,42 +818,46 @@ private void RefreshSpineFaceAnchorBindOffsets()
             return;
 
         _bindHeadLocalToSpine004 = Quaternion.Inverse(_spine004.rotation) * _head.rotation;
-        _bindHeadLocalToSpine004Local = Quaternion.Inverse(_spine004.localRotation) * _head.localRotation;
         if (_neck != null)
-        {
             _bindNeckLocalToSpine004 = Quaternion.Inverse(_spine004.rotation) * _neck.rotation;
-            _bindNeckLocalToSpine004Local = Quaternion.Inverse(_spine004.localRotation) * _neck.localRotation;
-        }
     }
 
-    private void ApplyHeadFromTorsoAndFaceModelLocal()
+    private void ApplyHeadFromTorsoAndFace(Vector3 torsoUpWorld)
     {
-        if (_head == null || _rootTransform == null) return;
-        if (!_modelLocalPos.TryGetValue("LEFT_EAR", out Vector3 leftEar)) return;
-        if (!_modelLocalPos.TryGetValue("RIGHT_EAR", out Vector3 rightEar)) return;
-        if (!_modelLocalPos.TryGetValue("NOSE", out Vector3 nose)) return;
+        if (_head == null || _rootTransform == null)
+            return;
+        if (!_pos.TryGetValue("LEFT_EAR", out Vector3 leftEar))
+            return;
+        if (!_pos.TryGetValue("RIGHT_EAR", out Vector3 rightEar))
+            return;
+        if (!_pos.TryGetValue("NOSE", out Vector3 nose))
+            return;
 
         Vector3 earMid = 0.5f * (leftEar + rightEar);
         Vector3 faceForwardLocal = nose - earMid; // back-of-skull -> face direction
         Vector3 headRightLocal = rightEar - leftEar;
-        if (faceForwardLocal.sqrMagnitude < 1e-6f || headRightLocal.sqrMagnitude < 1e-6f) return;
+        if (faceForwardLocal.sqrMagnitude < 1e-6f || headRightLocal.sqrMagnitude < 1e-6f)
+            return;
 
-        faceForwardLocal.Normalize();
-        headRightLocal.Normalize();
+        Vector3 faceForwardWorld = _rootTransform.TransformDirection(faceForwardLocal.normalized);
+        Vector3 headRightWorld = _rootTransform.TransformDirection(headRightLocal.normalized);
 
-        // Build an orthonormal frame in model-local space, keeping up aligned with the model's Y axis.
-        Vector3 up = Vector3.up;
-        Vector3 right = Vector3.ProjectOnPlane(headRightLocal, up).normalized;
+        // Rebuild orthonormal frame while anchoring up to torso so head follows spine kinematics.
+        Vector3 up = torsoUpWorld.sqrMagnitude > 1e-6f ? torsoUpWorld.normalized : _rootTransform.up;
+        Vector3 right = Vector3.ProjectOnPlane(headRightWorld, up).normalized;
         if (right.sqrMagnitude < 1e-6f)
-            right = Vector3.Cross(up, faceForwardLocal).normalized;
-        if (right.sqrMagnitude < 1e-6f) return;
+            right = Vector3.Cross(up, faceForwardWorld).normalized;
+        if (right.sqrMagnitude < 1e-6f)
+            return;
 
         Vector3 forward = Vector3.Cross(right, up).normalized;
-        if (Vector3.Dot(forward, faceForwardLocal) < 0f) forward = -forward;
-        if (forward.sqrMagnitude < 1e-6f) return;
+        if (Vector3.Dot(forward, faceForwardWorld) < 0f)
+            forward = -forward;
+        if (forward.sqrMagnitude < 1e-6f)
+            return;
 
-        Quaternion targetHeadFrameLocal = Quaternion.LookRotation(forward, up);
-        Quaternion correction = targetHeadFrameLocal * Quaternion.Inverse(_bindHeadFrameLocal);
+        Quaternion targetHeadFrame = Quaternion.LookRotation(forward, up);
+        Quaternion correction = targetHeadFrame * Quaternion.Inverse(_bindHeadFrame);
         correction = Quaternion.Slerp(Quaternion.identity, correction, torsoKinematicBlend);
 
         if (maxRotationPerFrame < 180f)
@@ -1013,33 +867,65 @@ private void RefreshSpineFaceAnchorBindOffsets()
                 correction = Quaternion.Slerp(Quaternion.identity, correction, maxRotationPerFrame / angle);
         }
 
-        Quaternion desiredHeadLocalRot = correction * _bindHeadModelLocalRot;
-        float dtSmooth = Time.deltaTime * smoothSpeed;
+        // "Face direction" results in a desired HEAD world rotation.
+        Quaternion desiredHeadWorldRot = correction * _bindHeadWorldRot;
 
+        // If we can't find neck, fall back to face->head behavior.
         if (_neck == null)
         {
-            _head.rotation = Quaternion.Slerp(_head.rotation, _rootTransform.rotation * desiredHeadLocalRot, dtSmooth);
+            _head.rotation = Quaternion.Slerp(_head.rotation, desiredHeadWorldRot, Time.deltaTime * smoothSpeed);
             return;
         }
+
+        float dtSmooth = Time.deltaTime * smoothSpeed;
 
         switch (headFaceBindingMode)
         {
             case HeadFaceBindingMode.FaceDrivesHead:
-            case HeadFaceBindingMode.FaceDrivesNeck:
             {
-                Quaternion desiredNeckLocalRot = desiredHeadLocalRot * Quaternion.Inverse(_bindHeadLocalToNeck);
-                desiredNeckLocalRot = Quaternion.Slerp(_bindNeckModelLocalRot, desiredNeckLocalRot, headFaceBlend);
+                // Group face + neck together: face aims neck, then head is locked to neck.
+                Quaternion desiredNeckWorldRot = desiredHeadWorldRot * Quaternion.Inverse(_bindHeadLocalToNeck);
+
+                // Interpret headFaceBlend as "how much neck follows the face".
+                desiredNeckWorldRot = Quaternion.Slerp(_neck.rotation, desiredNeckWorldRot, headFaceBlend);
 
                 if (maxRotationPerFrame < 180f)
                 {
-                    Quaternion neckCorrection = desiredNeckLocalRot * Quaternion.Inverse(_bindNeckModelLocalRot);
+                    Quaternion neckCorrection = desiredNeckWorldRot * Quaternion.Inverse(_neck.rotation);
                     float angle = Quaternion.Angle(Quaternion.identity, neckCorrection);
                     if (angle > maxRotationPerFrame && angle > 0.01f)
                         neckCorrection = Quaternion.Slerp(Quaternion.identity, neckCorrection, maxRotationPerFrame / angle);
-                    desiredNeckLocalRot = neckCorrection * _bindNeckModelLocalRot;
+                    desiredNeckWorldRot = neckCorrection * _neck.rotation;
                 }
 
-                _neck.rotation = Quaternion.Slerp(_neck.rotation, _rootTransform.rotation * desiredNeckLocalRot, dtSmooth);
+                _neck.rotation = Quaternion.Slerp(_neck.rotation, desiredNeckWorldRot, dtSmooth);
+
+                // Lock head to neck (prevents stretched/stacked head motion).
+                Quaternion lockedHeadWorldRot = _neck.rotation * _bindHeadLocalToNeck;
+                _head.rotation = Quaternion.Slerp(_head.rotation, lockedHeadWorldRot, dtSmooth);
+                break;
+            }
+
+            case HeadFaceBindingMode.FaceDrivesNeck:
+            {
+                // Find neck rotation such that: neck * (headLocalToNeck bind) ~= desiredHeadWorldRot.
+                Quaternion desiredNeckWorldRot = desiredHeadWorldRot * Quaternion.Inverse(_bindHeadLocalToNeck);
+
+                // Interpret headFaceBlend as "how much neck follows the face".
+                desiredNeckWorldRot = Quaternion.Slerp(_neck.rotation, desiredNeckWorldRot, headFaceBlend);
+
+                if (maxRotationPerFrame < 180f)
+                {
+                    Quaternion neckCorrection = desiredNeckWorldRot * Quaternion.Inverse(_neck.rotation);
+                    float angle = Quaternion.Angle(Quaternion.identity, neckCorrection);
+                    if (angle > maxRotationPerFrame && angle > 0.01f)
+                        neckCorrection = Quaternion.Slerp(Quaternion.identity, neckCorrection, maxRotationPerFrame / angle);
+                    desiredNeckWorldRot = neckCorrection * _neck.rotation;
+                }
+
+                _neck.rotation = Quaternion.Slerp(_neck.rotation, desiredNeckWorldRot, dtSmooth);
+
+                // Lock head to neck (so head mesh doesn't "stretch" independently).
                 Quaternion lockedHeadWorldRot = _neck.rotation * _bindHeadLocalToNeck;
                 _head.rotation = Quaternion.Slerp(_head.rotation, lockedHeadWorldRot, dtSmooth);
                 break;
@@ -1047,6 +933,7 @@ private void RefreshSpineFaceAnchorBindOffsets()
 
             case HeadFaceBindingMode.LockHeadToNeck:
             {
+                // Ignore face aim for head and just lock to current neck posture.
                 Quaternion lockedHeadWorldRot = _neck.rotation * _bindHeadLocalToNeck;
                 _head.rotation = Quaternion.Slerp(_head.rotation, lockedHeadWorldRot, dtSmooth);
                 break;
@@ -1061,42 +948,45 @@ private void RefreshSpineFaceAnchorBindOffsets()
                         _loggedSpineFaceAnchorMissing = true;
                         Debug.LogWarning("[HumanoidPoseDriver] Face->Spine004: no spine face anchor (assign Spine Face Anchor Override on the driver, or check humanoid Chest/Spine mapping). Falling back to neck.");
                     }
+                    // Fallback: if we can't find the anchor bone, behave like Face->Neck.
                     if (_neck != null)
                     {
-                        Quaternion desiredNeckLocalRot = desiredHeadLocalRot * Quaternion.Inverse(_bindHeadLocalToNeck);
-                        desiredNeckLocalRot = Quaternion.Slerp(_bindNeckModelLocalRot, desiredNeckLocalRot, headFaceBlend);
-                        _neck.rotation = Quaternion.Slerp(_neck.rotation, _rootTransform.rotation * desiredNeckLocalRot, dtSmooth);
+                        Quaternion desiredNeckWorldRot = desiredHeadWorldRot * Quaternion.Inverse(_bindHeadLocalToNeck);
+                        desiredNeckWorldRot = Quaternion.Slerp(_neck.rotation, desiredNeckWorldRot, headFaceBlend);
+                        _neck.rotation = Quaternion.Slerp(_neck.rotation, desiredNeckWorldRot, dtSmooth);
                         Quaternion lockedHeadWorldRot = _neck.rotation * _bindHeadLocalToNeck;
                         _head.rotation = Quaternion.Slerp(_head.rotation, lockedHeadWorldRot, dtSmooth);
                     }
                     else
-                        _head.rotation = Quaternion.Slerp(_head.rotation, _rootTransform.rotation * desiredHeadLocalRot, dtSmooth);
+                        _head.rotation = Quaternion.Slerp(_head.rotation, desiredHeadWorldRot, dtSmooth);
                     break;
                 }
 
-                Quaternion desiredSpine004LocalRot = desiredHeadLocalRot * Quaternion.Inverse(_bindHeadLocalToSpine004Local);
-                desiredSpine004LocalRot = Quaternion.Slerp(_spine004.localRotation, desiredSpine004LocalRot, headFaceBlend);
+                // Aim the spine anchor so the head matches desiredHeadWorldRot (same blend as neck modes).
+                Quaternion desiredSpine004WorldRot = desiredHeadWorldRot * Quaternion.Inverse(_bindHeadLocalToSpine004);
+                desiredSpine004WorldRot = Quaternion.Slerp(_spine004.rotation, desiredSpine004WorldRot, headFaceBlend);
 
                 if (maxRotationPerFrame < 180f)
                 {
-                    Quaternion delta = desiredSpine004LocalRot * Quaternion.Inverse(_spine004.localRotation);
+                    Quaternion delta = desiredSpine004WorldRot * Quaternion.Inverse(_spine004.rotation);
                     float angle = Quaternion.Angle(Quaternion.identity, delta);
                     if (angle > maxRotationPerFrame && angle > 0.01f)
                     {
                         Quaternion rel = Quaternion.Slerp(Quaternion.identity, delta, maxRotationPerFrame / angle);
-                        desiredSpine004LocalRot = rel * _spine004.localRotation;
+                        desiredSpine004WorldRot = rel * _spine004.rotation;
                     }
                 }
 
-                _spine004.rotation = Quaternion.Slerp(_spine004.rotation, _rootTransform.rotation * desiredSpine004LocalRot, dtSmooth);
+                _spine004.rotation = Quaternion.Slerp(_spine004.rotation, desiredSpine004WorldRot, dtSmooth);
 
+                // Glue neck then head to anchor (parent chain order) so face verts stay with back-of-head verts.
                 if (_neck != null)
                 {
-                    Quaternion neckTargetLocalRot = _spine004.localRotation * _bindNeckLocalToSpine004Local;
-                    _neck.rotation = Quaternion.Slerp(_neck.rotation, _rootTransform.rotation * neckTargetLocalRot, dtSmooth);
+                    Quaternion neckTargetWorldRot = _spine004.rotation * _bindNeckLocalToSpine004;
+                    _neck.rotation = Quaternion.Slerp(_neck.rotation, neckTargetWorldRot, dtSmooth);
                 }
-                Quaternion headTargetLocalRot = _spine004.localRotation * _bindHeadLocalToSpine004Local;
-                _head.rotation = Quaternion.Slerp(_head.rotation, _rootTransform.rotation * headTargetLocalRot, dtSmooth);
+                Quaternion headTargetWorldRot = _spine004.rotation * _bindHeadLocalToSpine004;
+                _head.rotation = Quaternion.Slerp(_head.rotation, headTargetWorldRot, dtSmooth);
                 break;
             }
         }
