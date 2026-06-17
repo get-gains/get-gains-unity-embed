@@ -151,10 +151,30 @@ public class FlutterUnityBridge : MonoBehaviour
             posePlaybackController.ResolveHumanoidDriver();
             if (preferStickFigureOnly)
                 posePlaybackController.SetUseStickFigureOnly(true);
+
+            // Reset the rig to bind pose before applying a new recording so limbs
+            // that aren't present in the new landmarks (e.g. legs) don't stay frozen
+            // in the previous form's position.
+            var humanoid = posePlaybackController.ActiveHumanoidDriver;
+            humanoid?.ResetPose();
+
             posePlaybackController.LoadFrames(payload.Frames, payload.Fps, payload.Loop);
             Debug.Log($"[FlutterUnityBridge] LoadPoseFrames: {payload.Frames?.Count ?? 0} frames, fps={payload.Fps}, loop={payload.Loop}");
             FrameCameraToFigure();
         }
+    }
+
+    /// <summary>
+    /// Flutter → Unity: snap the humanoid back to its initial bind pose.
+    /// Useful as a manual reset switch between recordings.
+    /// </summary>
+    public void ResetPose(string message)
+    {
+        EnsurePosePlayback();
+        posePlaybackController?.ResolveHumanoidDriver();
+        var humanoid = posePlaybackController?.ActiveHumanoidDriver;
+        humanoid?.ResetPose();
+        Debug.Log("[FlutterUnityBridge] ResetPose");
     }
 
     public void PlayPose(string message)
@@ -339,7 +359,8 @@ public class FlutterUnityBridge : MonoBehaviour
             case "REAR":           offset = new Vector3(0, 0, distance); break;
             case "ANGLE_45_LEFT":  offset = Quaternion.Euler(0, 45, 0) * new Vector3(0, 0, -distance); break;
             case "ANGLE_45_RIGHT": offset = Quaternion.Euler(0, -45, 0) * new Vector3(0, 0, -distance); break;
-            default:               offset = new Vector3(0, 0, -distance); break;
+            case "DIAGONAL":
+            default:               offset = Quaternion.Euler(15, -135, 0) * new Vector3(0, 0, -distance); break;
         }
 
         poseCamera.transform.position = target + offset;
