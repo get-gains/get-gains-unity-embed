@@ -158,6 +158,7 @@ public class HumanoidPoseDriver : MonoBehaviour
     private struct RuntimeBone
     {
         public Transform Bone;
+        public HumanBodyBones BoneType;
         public string From;
         public string To;
         public Vector3 BindLocalDir;
@@ -229,10 +230,16 @@ public class HumanoidPoseDriver : MonoBehaviour
     [Tooltip("Max degrees per second the root can rotate to follow inferred body direction. 0 = lock root rotation.")]
     [SerializeField] private float bodyYawMaxSpeed = 120f;
 
+    [Tooltip("Optional hint for the recorded camera angle (FRONT, ANGLE_45_LEFT, etc.). Biases body yaw when landmark depth is ambiguous.")]
+    [SerializeField] private string recordingAngleHint = "";
+
         private Vector3 _initialRootPosition;
     private Quaternion _initialRootRotation = Quaternion.identity;
     private Vector3 _initialRootScale = Vector3.one;
 private float _currentBodyYaw;
+
+    /// <summary>Raw head facing computed before head-straightening smoothing; used for body yaw.</summary>
+    private Vector3 _rawHeadFacingXZ;
     private readonly Dictionary<string, Vector3> _modelLocalPos = new Dictionary<string, Vector3>();
 
     // Local-space bind frames so retargeting works correctly as the root yaw changes.
@@ -270,6 +277,16 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
     public void SetDebugInvertHeadDepthZ(bool value)
     {
         _debugInvertHeadDepthZ = value;
+    }
+
+    /// <summary>
+    /// Sets the recorded camera angle hint (e.g. "ANGLE_45_RIGHT"). The retargeter uses this
+    /// to stabilise body yaw when depth cues are ambiguous.
+    /// </summary>
+    /// <param name="angle">Angle string from Flutter; unknown values are ignored.</param>
+    public void SetRecordingAngleHint(string angle)
+    {
+        recordingAngleHint = (angle ?? "").Trim().ToUpperInvariant();
     }
 
     public bool DebugInvertLegDepthZ
@@ -406,6 +423,7 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             _bones.Add(new RuntimeBone
             {
                 Bone = bone,
+                BoneType = m.Bone,
                 From = m.From,
                 To = m.To,
                 BindLocalDir = bindDirModelLocal,
@@ -488,6 +506,7 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
 
     /// <summary>
     /// Infers the Y-axis rotation that aligns the model's bind forward with the person's body forward.
+    /// Combines raw head facing (best at 45°), torso frame, and the recorded camera angle hint.
     /// Falls back to the current yaw if no reliable forward vector is available.
     /// </summary>
     private float ComputeBodyYaw()
@@ -495,12 +514,13 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
         Vector3 forward = Vector3.zero;
         bool hasForward = false;
 
-        // Prefer the already-smoothed head forward if it was computed this frame.
-        if (_headForwardSmoothed.sqrMagnitude > 1e-6f)
+        // 1. Raw head facing from eye/ear depth asymmetry is the strongest 45° cue.
+        if (_rawHeadFacingXZ.sqrMagnitude > 1e-6f)
         {
-            forward = _headForwardSmoothed;
+            forward = _rawHeadFacingXZ;
             hasForward = true;
         }
+        // 2. Fall back to torso frame from shoulders/hips.
         else if (PoseLandmarkMapping.TryComputeBodyForward(_pos, out Vector3 torsoForward))
         {
             forward = torsoForward;
@@ -512,7 +532,60 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
         Vector3 forwardXZ = Vector3.ProjectOnPlane(forward, Vector3.up).normalized;
         if (forwardXZ.sqrMagnitude < 1e-6f) return _currentBodyYaw;
 
-        return Mathf.Atan2(forwardXZ.x, forwardXZ.z) * Mathf.Rad2Deg;
+        // Nose should be in front of the facing direction; if not, flip.
+        if (_pos.TryGetValue("NOSE", out Vector3 nose) &&
+            _pos.TryGetValue("MID_SHOULDER", out Vector3 midShoulder))
+        {
+            Vector3 noseDir = nose - midShoulder;
+            if (noseDir.sqrMagnitude > 1e-10f && Vector3.Dot(forwardXZ, noseDir) < 0f)
+                forwardXZ = -forwardXZ;
+        }
+
+        float yaw = Mathf.Atan2(forwardXZ.x, forwardXZ.z) * Mathf.Rad2Deg;
+
+        // 3. Blend toward the camera-angle hint when it is provided and the
+        //    inferred yaw is close to it. This prevents the root from flipping
+        //    180° when depth noise makes the head/torso cues ambiguous.
+        if (!string.IsNullOrEmpty(recordingAngleHint))
+        {
+            float? hintYaw = RecordingAngleToYaw(recordingAngleHint);
+            if (hintYaw.HasValue)
+            {
+                float delta = Mathf.DeltaAngle(yaw, hintYaw.Value);
+                // If inferred yaw is within 60° of the hint, pull it closer.
+                if (Mathf.Abs(delta) < 60f)
+                {
+                    yaw = Mathf.MoveTowardsAngle(yaw, hintYaw.Value, Mathf.Abs(delta) * 0.5f);
+                }
+                // If we have no strong head/torso cue, trust the hint entirely.
+                else if (_rawHeadFacingXZ.sqrMagnitude <= 1e-6f &&
+                         !PoseLandmarkMapping.TryComputeBodyForward(_pos, out _))
+                {
+                    yaw = hintYaw.Value;
+                }
+            }
+        }
+
+        return yaw;
+    }
+
+    /// <summary>
+    /// Converts the recorded camera angle string into a yaw angle in Unity world space.
+    /// Returns null for unknown angles.
+    /// </summary>
+    private static float? RecordingAngleToYaw(string angle)
+    {
+        switch (angle)
+        {
+            case "FRONT": return 0f;
+            case "REAR": return 180f;
+            case "SIDE_LEFT": return 90f;
+            case "SIDE_RIGHT": return -90f;
+            case "ANGLE_45_LEFT": return 45f;
+            case "ANGLE_45_RIGHT": return -45f;
+            case "DIAGONAL": return -135f;
+            default: return null;
+        }
     }
 
     /// <summary>
@@ -547,6 +620,7 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
     {
         _pos.Clear();
         _confidence.Clear();
+        _rawHeadFacingXZ = Vector3.zero;
         double zRef = PoseLandmarkMapping.ComputeZReference(landmarks);
         float zMult = PoseLandmarkMapping.ComputeDepthMultiplier(
             landmarks, poseScale, zRef, zSpanFloor, zMultiplierCap);
@@ -585,6 +659,14 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             ApplyDebugArmLandmarkSwap();
         PoseLandmarkMapping.ApplyInvertArmWorldZ(_pos, _debugInvertArmDepthZ);
         PoseLandmarkMapping.ApplyInvertLegWorldZ(_pos, _debugInvertLegDepthZ);
+
+        // Capture raw head facing BEFORE straightening rewrites the head cluster.
+        // This is the most reliable hint for body yaw at 45° side angles.
+        if (PoseLandmarkMapping.TryComputeHeadFacingXZ(_pos, out Vector3 rawFacing))
+        {
+            _rawHeadFacingXZ = rawFacing;
+        }
+
         // After shoulders/depth are final so torso "forward" matches retargeting debug.
         PoseLandmarkMapping.ApplyHeadStraightAheadNearShoulder(
             _pos,
@@ -816,6 +898,9 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             Quaternion correction = Quaternion.FromToRotation(rb.BindLocalDir, targetDir);
             correction = Quaternion.Slerp(Quaternion.identity, correction, rb.Blend);
 
+            // Anatomical joint limits: prevent knees/elbows/etc. from bending too far.
+            correction = ClampJointCorrection(rb, correction);
+
             if (maxRotationPerFrame < 180f)
             {
                 float angle = Quaternion.Angle(Quaternion.identity, correction);
@@ -826,6 +911,58 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             Quaternion targetLocalRot = correction * rb.BindModelLocalRot;
             Quaternion targetWorldRot = _rootTransform.rotation * targetLocalRot;
             rb.Bone.rotation = Quaternion.Slerp(rb.Bone.rotation, targetWorldRot, Time.deltaTime * smoothSpeed);
+        }
+    }
+
+    /// <summary>
+    /// Clamps a bone correction to anatomically sensible limits based on the bone type.
+    /// This is a soft guard against impossible poses (e.g. knee bending forward 180°).
+    /// </summary>
+    private Quaternion ClampJointCorrection(RuntimeBone rb, Quaternion correction)
+    {
+        float maxAngle = GetMaxJointAngle(rb);
+        if (maxAngle >= 180f) return correction;
+
+        float angle = Quaternion.Angle(Quaternion.identity, correction);
+        if (angle <= maxAngle) return correction;
+        if (angle < 0.01f) return correction;
+
+        return Quaternion.Slerp(Quaternion.identity, correction, maxAngle / angle);
+    }
+
+    /// <summary>
+    /// Returns the maximum allowed rotation angle from bind pose for the given bone.
+    /// Spine/hip bones are not clamped; limb bones get approximate anatomical limits.
+    /// </summary>
+    private float GetMaxJointAngle(RuntimeBone rb)
+    {
+        switch (rb.BoneType)
+        {
+            // Legs
+            case HumanBodyBones.LeftUpperLeg:
+            case HumanBodyBones.RightUpperLeg:
+                return 120f;
+            case HumanBodyBones.LeftLowerLeg:
+            case HumanBodyBones.RightLowerLeg:
+                return 150f;
+            case HumanBodyBones.LeftFoot:
+            case HumanBodyBones.RightFoot:
+                return 60f;
+
+            // Arms
+            case HumanBodyBones.LeftUpperArm:
+            case HumanBodyBones.RightUpperArm:
+                return 180f;
+            case HumanBodyBones.LeftLowerArm:
+            case HumanBodyBones.RightLowerArm:
+                return 160f;
+            case HumanBodyBones.LeftHand:
+            case HumanBodyBones.RightHand:
+                return 90f;
+
+            // Spine/head/neck: do not clamp
+            default:
+                return 180f;
         }
     }
 
@@ -956,6 +1093,7 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
 
         _currentBodyYaw = 0f;
         _headForwardSmoothed = Vector3.zero;
+        _rawHeadFacingXZ = Vector3.zero;
         _targetRootPosition = _initialRootPosition;
         _targetScale = _initialRootScale.x;
     }

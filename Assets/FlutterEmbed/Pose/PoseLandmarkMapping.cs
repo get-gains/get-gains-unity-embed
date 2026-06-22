@@ -289,6 +289,34 @@ public static class PoseLandmarkMapping
     }
 
     /// <summary>
+    /// Infers horizontal facing direction from the eye→ear depth offset.
+    /// When the head is turned 45°, the ear on the side facing the camera is closer
+    /// (smaller raw Z) than the eye on that side, while the opposite side is farther.
+    /// The vector from ear-mid to eye-mid projected onto XZ gives a robust facing hint.
+    /// </summary>
+    /// <param name="worldPos">Mapped landmark positions in world/pose space.</param>
+    /// <param name="facing">Output unit facing vector in the XZ plane.</param>
+    /// <returns>True if eyes and ears are present.</returns>
+    public static bool TryComputeHeadFacingXZ(IReadOnlyDictionary<string, Vector3> worldPos, out Vector3 facing)
+    {
+        facing = default;
+        if (!worldPos.TryGetValue("LEFT_EAR", out Vector3 leftEar) ||
+            !worldPos.TryGetValue("RIGHT_EAR", out Vector3 rightEar) ||
+            !worldPos.TryGetValue("LEFT_EYE", out Vector3 leftEye) ||
+            !worldPos.TryGetValue("RIGHT_EYE", out Vector3 rightEye))
+            return false;
+
+        Vector3 earMid = 0.5f * (leftEar + rightEar);
+        Vector3 eyeMid = 0.5f * (leftEye + rightEye);
+        Vector3 forward = eyeMid - earMid;
+        forward.y = 0f;
+        if (forward.sqrMagnitude < 1e-10f)
+            return false;
+        facing = forward.normalized;
+        return true;
+    }
+
+    /// <summary>
     /// Left–right in the shoulder girdle, stable in side view: project shoulder line onto plane ⊥ spine,
     /// fall back to projected hip line, then a geometry-only axis so normalization does not chase depth noise.
     /// </summary>

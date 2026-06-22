@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
@@ -13,8 +14,10 @@ public class FlutterUnityBridge : MonoBehaviour
     [SerializeField] private PosePlaybackController posePlaybackController;
     [SerializeField] private Camera poseCamera;
     [SerializeField] private CosmeticManager cosmeticManager;
+    [SerializeField] private PoseComparisonController poseComparisonController;
 
     private OrbitCameraController _orbitController;
+    private string _lastRecordingAngleHint = "";
     private float rotationSpeed;
     private bool sceneLoadedSent;
     private CameraViewMode _currentViewMode = CameraViewMode.Workout;
@@ -77,6 +80,15 @@ public class FlutterUnityBridge : MonoBehaviour
             _orbitController = poseCamera.gameObject.AddComponent<OrbitCameraController>();
         _orbitController.SetCamera(poseCamera);
         return _orbitController;
+    }
+
+    private PoseComparisonController EnsureComparisonController()
+    {
+        if (poseComparisonController != null) return poseComparisonController;
+        poseComparisonController = GetComponent<PoseComparisonController>();
+        if (poseComparisonController == null)
+            poseComparisonController = gameObject.AddComponent<PoseComparisonController>();
+        return poseComparisonController;
     }
 
     private void Start()
@@ -159,6 +171,14 @@ public class FlutterUnityBridge : MonoBehaviour
             humanoid?.ResetPose();
 
             posePlaybackController.LoadFrames(payload.Frames, payload.Fps, payload.Loop);
+
+            // Forward the recorded camera angle to the retargeter for stable 45° yaw.
+            if (!string.IsNullOrEmpty(_lastRecordingAngleHint))
+            {
+                posePlaybackController.ResolveHumanoidDriver();
+                posePlaybackController.ActiveHumanoidDriver?.SetRecordingAngleHint(_lastRecordingAngleHint);
+            }
+
             Debug.Log($"[FlutterUnityBridge] LoadPoseFrames: {payload.Frames?.Count ?? 0} frames, fps={payload.Fps}, loop={payload.Loop}");
             FrameCameraToFigure();
         }
@@ -266,6 +286,85 @@ public class FlutterUnityBridge : MonoBehaviour
         posePlaybackController.SetDebugInvertLegDepthZ(opts.invertLegDepthZ);
         Debug.Log(
             $"[FlutterUnityBridge] SetPoseDebugOptions swapArmLandmarks={opts.swapArmLandmarks} forceShowStickFigure={opts.forceShowStickFigure} invertArmDepthZ={opts.invertArmDepthZ} invertHeadDepthZ={opts.invertHeadDepthZ} invertLegDepthZ={opts.invertLegDepthZ}");
+    }
+
+    /// <summary>
+    /// Flutter → Unity: tell the pose retargeter the recorded camera angle
+    /// (FRONT, ANGLE_45_LEFT, ANGLE_45_RIGHT, etc.) so body yaw stays stable.
+    /// </summary>
+    public void SetRecordingAngleHint(string message)
+    {
+        _lastRecordingAngleHint = (message ?? "").Trim().ToUpperInvariant();
+
+        EnsurePosePlayback();
+        if (posePlaybackController != null)
+        {
+            posePlaybackController.ResolveHumanoidDriver();
+            var humanoid = posePlaybackController.ActiveHumanoidDriver;
+            humanoid?.SetRecordingAngleHint(_lastRecordingAngleHint);
+        }
+
+        var comparison = EnsureComparisonController();
+        comparison?.SetRecordingAngleHint(_lastRecordingAngleHint);
+
+        Debug.Log($"[FlutterUnityBridge] SetRecordingAngleHint: {_lastRecordingAngleHint}");
+    }
+
+    /// <summary>
+    /// Flutter → Unity: enter side-by-side comparison mode.
+    /// Message: JSON with { referenceFrames: [...], clientFrames: [...], fps: 15, loop: true }
+    /// Loads coach reference into the left (green) model and client into the right (orange) model.
+    /// </summary>
+    public void EnterComparisonMode(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            Debug.LogWarning("[FlutterUnityBridge] EnterComparisonMode: empty payload");
+            return;
+        }
+
+        if (!PoseComparisonPayload.TryParse(message, out PoseComparisonPayloadData payload))
+        {
+            Debug.LogWarning("[FlutterUnityBridge] EnterComparisonMode: failed to parse JSON");
+            return;
+        }
+
+        EnsurePosePlayback();
+        if (posePlaybackController != null)
+        {
+            posePlaybackController.Pause();
+            var renderer = posePlaybackController.GetComponentInChildren<PoseStickFigureRenderer>();
+            if (renderer != null) renderer.SetVisible(false);
+        }
+
+        var comparison = EnsureComparisonController();
+        comparison?.EnterComparisonMode(
+            payload.ReferenceFrames,
+            payload.ClientFrames,
+            payload.Fps,
+            poseCamera,
+            EnsureOrbitController());
+
+        Debug.Log($"[FlutterUnityBridge] EnterComparisonMode: ref={payload.ReferenceFrames?.Count ?? 0}, client={payload.ClientFrames?.Count ?? 0}");
+    }
+
+    /// <summary>
+    /// Flutter → Unity: exit side-by-side comparison mode and return to single-avatar playback.
+    /// </summary>
+    public void ExitComparisonMode(string message)
+    {
+        var comparison = EnsureComparisonController();
+        comparison?.ExitComparisonMode();
+
+        if (posePlaybackController != null)
+        {
+            var renderer = posePlaybackController.GetComponentInChildren<PoseStickFigureRenderer>();
+            if (renderer != null) renderer.SetVisible(true);
+            posePlaybackController.Play();
+        }
+
+        FrameCameraToFigure();
+        Debug.Log("[FlutterUnityBridge] ExitComparisonMode");
     }
 
     /// <summary>
@@ -473,4 +572,73 @@ public class PoseDebugOptionsJson
     public bool invertArmDepthZ;
     public bool invertHeadDepthZ;
     public bool invertLegDepthZ;
+}
+
+/// <summary>
+/// Lightweight parser for the EnterComparisonMode JSON payload.
+/// Reuses the existing PoseDataParser frame format for both reference and client arrays.
+/// </summary>
+public static class PoseComparisonPayload
+{
+    [System.Serializable]
+    private class Envelope
+    {
+        public string referenceFrames;
+        public string clientFrames;
+        public int fps;
+        public bool loop;
+    }
+
+    public static bool TryParse(string json, out PoseComparisonPayloadData payload)
+    {
+        payload = null;
+        if (string.IsNullOrWhiteSpace(json)) return false;
+
+        try
+        {
+            var env = JsonUtility.FromJson<Envelope>(json);
+            if (env == null) return false;
+
+            int fps = env.fps > 0 ? env.fps : 15;
+
+            var reference = new List<PoseFrame>();
+            var client = new List<PoseFrame>();
+
+            if (!string.IsNullOrWhiteSpace(env.referenceFrames))
+            {
+                var refPayload = $"{{\"frames\":{env.referenceFrames},\"fps\":{fps},\"loop\":{env.loop.ToString().ToLowerInvariant()}}}";
+                if (PoseDataParser.TryParse(refPayload, out PosePayload rp))
+                    reference = rp.Frames;
+            }
+
+            if (!string.IsNullOrWhiteSpace(env.clientFrames))
+            {
+                var clientPayload = $"{{\"frames\":{env.clientFrames},\"fps\":{fps},\"loop\":{env.loop.ToString().ToLowerInvariant()}}}";
+                if (PoseDataParser.TryParse(clientPayload, out PosePayload cp))
+                    client = cp.Frames;
+            }
+
+            payload = new PoseComparisonPayloadData
+            {
+                ReferenceFrames = reference,
+                ClientFrames = client,
+                Fps = fps,
+                Loop = env.loop,
+            };
+            return true;
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"[PoseComparisonPayload] Parse error: {e.Message}");
+            return false;
+        }
+    }
+}
+
+public class PoseComparisonPayloadData
+{
+    public List<PoseFrame> ReferenceFrames;
+    public List<PoseFrame> ClientFrames;
+    public int Fps;
+    public bool Loop;
 }
