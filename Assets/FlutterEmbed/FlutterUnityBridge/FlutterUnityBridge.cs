@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using FlutterEmbed;
 using UnityEngine;
 
 /// <summary>
@@ -216,7 +217,16 @@ public class FlutterUnityBridge : MonoBehaviour
     public void SetSkeletonColor(string message)
     {
         if (posePlaybackController != null && ColorUtility.TryParseHtmlString(message?.Trim(), out Color color))
+        {
             posePlaybackController.SetSkeletonColor(color);
+            // Tint the active humanoid model as well so the avatar matches the skeleton color.
+            var driver = posePlaybackController.ActiveHumanoidDriver;
+            if (driver != null)
+            {
+                var applier = driver.GetComponent<AvatarMaterialApplier>();
+                if (applier != null) applier.SetTint(color);
+            }
+        }
     }
 
     /// <summary>
@@ -346,6 +356,7 @@ public class FlutterUnityBridge : MonoBehaviour
             EnsureOrbitController());
 
         Debug.Log($"[FlutterUnityBridge] EnterComparisonMode: ref={payload.ReferenceFrames?.Count ?? 0}, client={payload.ClientFrames?.Count ?? 0}");
+        SendToFlutter.Send("comparison_entered");
     }
 
     /// <summary>

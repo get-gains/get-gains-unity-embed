@@ -54,12 +54,14 @@ public class PoseComparisonController : MonoBehaviour
             return;
         }
 
-        ResolveDrivers();
+        // Activate the client first so its Animator/HumanoidPoseDriver can initialize.
+        clientMannequin.SetActive(true);
 
         // Position models side by side.
         coachMannequin.transform.position = new Vector3(coachX, 0f, 0f);
         clientMannequin.transform.position = new Vector3(clientX, 0f, 0f);
-        clientMannequin.SetActive(true);
+
+        ResolveDrivers();
 
         // Apply colors.
         ApplyTint(coachMannequin, coachColor);
@@ -73,8 +75,12 @@ public class PoseComparisonController : MonoBehaviour
         _coachPlayback.LoadFrames(referenceFrames, fps, true);
         _clientPlayback.LoadFrames(clientFrames, fps, true);
 
+        Debug.Log($"[PoseComparisonController] Loaded frames: ref={referenceFrames?.Count ?? 0}, client={clientFrames?.Count ?? 0}. Playing...");
+
         _coachPlayback.Play();
         _clientPlayback.Play();
+
+        Debug.Log($"[PoseComparisonController] Play states: coach={_coachPlayback.IsPlaying}, client={_clientPlayback.IsPlaying}");
 
         _isInComparisonMode = true;
 
@@ -84,13 +90,25 @@ public class PoseComparisonController : MonoBehaviour
     }
 
     /// <summary>
-    /// Exit comparison mode and hide the client mannequin.
+    /// Exit comparison mode: hide the client mannequin, pause both playbacks,
+    /// reset the coach mannequin to the origin and remove its tint so normal
+    /// form viewing shows the original avatar color.
     /// </summary>
     public void ExitComparisonMode()
     {
         _isInComparisonMode = false;
+        if (_coachPlayback != null) _coachPlayback.Pause();
         if (_clientPlayback != null) _clientPlayback.Pause();
+
         if (clientMannequin != null) clientMannequin.SetActive(false);
+
+        if (coachMannequin != null)
+        {
+            coachMannequin.transform.position = Vector3.zero;
+            // Reset coach tint to the default orange used for normal form viewing.
+            ApplyTint(coachMannequin, clientColor);
+        }
+
         Debug.Log("[PoseComparisonController] Exited comparison mode.");
     }
 
@@ -157,6 +175,8 @@ public class PoseComparisonController : MonoBehaviour
         // Fallback: tint every renderer directly if no applier is present.
         foreach (var r in mannequin.GetComponentsInChildren<Renderer>(true))
         {
+            // Skip cosmetic items so hats/glasses keep their own look.
+            if (IsCosmeticRenderer(r.transform)) continue;
             if (r.sharedMaterial != null)
             {
                 var instance = new Material(r.sharedMaterial);
@@ -166,6 +186,16 @@ public class PoseComparisonController : MonoBehaviour
                 r.sharedMaterial = instance;
             }
         }
+    }
+
+    private static bool IsCosmeticRenderer(Transform t)
+    {
+        while (t != null)
+        {
+            if (t.GetComponent<CosmeticAttachment>() != null) return true;
+            t = t.parent;
+        }
+        return false;
     }
 
     private void FrameBothFigures(Camera camera, OrbitCameraController orbit)

@@ -47,14 +47,34 @@ namespace FlutterEmbed
                 _instancedMaterial = new Material(material);
             }
 
-            _instancedMaterial.color = tint;
-            if (_instancedMaterial.HasProperty("_BaseColor"))
-                _instancedMaterial.SetColor("_BaseColor", tint);
-            if (_instancedMaterial.HasProperty("_Color"))
-                _instancedMaterial.SetColor("_Color", tint);
+            // Only override color when a non-white tint is requested. This preserves the
+            // source material's original color (e.g. orange base avatar) in normal scenes.
+            if (tint != Color.white)
+            {
+                _instancedMaterial.color = tint;
+                if (_instancedMaterial.HasProperty("_BaseColor"))
+                    _instancedMaterial.SetColor("_BaseColor", tint);
+                if (_instancedMaterial.HasProperty("_Color"))
+                    _instancedMaterial.SetColor("_Color", tint);
+            }
 
             foreach (var renderer in GetComponentsInChildren<Renderer>(includeInactive))
+            {
+                // Skip cosmetic items so hats/glasses keep their own materials.
+                if (IsCosmeticRenderer(renderer.transform)) continue;
                 renderer.sharedMaterial = _instancedMaterial;
+            }
+        }
+
+        /// <summary>Returns true if the renderer belongs to a cosmetic prefab instance.</summary>
+        private static bool IsCosmeticRenderer(Transform t)
+        {
+            while (t != null)
+            {
+                if (t.GetComponent<CosmeticAttachment>() != null) return true;
+                t = t.parent;
+            }
+            return false;
         }
     }
 }
