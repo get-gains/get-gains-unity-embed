@@ -44,6 +44,9 @@ public class PoseStickFigureRenderer : MonoBehaviour
     [SerializeField] private float zMultiplierCap = 60f;
     [SerializeField] private bool invertDepthAxis;
 
+    [Tooltip("When true, infer per-side arm/leg Z signs geometrically each frame instead of using the hardcoded debug flags.")]
+    [SerializeField] private bool useInferredDepthZ = true;
+
     [Header("Head")]
     [Tooltip("Match HumanoidPoseDriver.headReachScale.")]
     [SerializeField] private float headReachScale = 0.65f;
@@ -255,8 +258,17 @@ public class PoseStickFigureRenderer : MonoBehaviour
         }
 
         PoseLandmarkMapping.ApplyHeadClusterBlend(positions, headReachScale, headDepthScale);
-        PoseLandmarkMapping.ApplyInvertArmWorldZ(positions, _debugInvertArmDepthZ);
-        PoseLandmarkMapping.ApplyInvertLegWorldZ(positions, _debugInvertLegDepthZ);
+
+        if (useInferredDepthZ)
+        {
+            PoseLandmarkMapping.ApplyInferArmZSigns(positions);
+            PoseLandmarkMapping.ApplyInferLegZSigns(positions);
+        }
+        else
+        {
+            PoseLandmarkMapping.ApplyInvertArmWorldZ(positions, _debugInvertArmDepthZ);
+            PoseLandmarkMapping.ApplyInvertLegWorldZ(positions, _debugInvertLegDepthZ);
+        }
         PoseLandmarkMapping.ApplyHeadStraightAheadNearShoulder(
             positions,
             scale,

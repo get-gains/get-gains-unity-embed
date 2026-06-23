@@ -57,9 +57,9 @@ public class FlutterUnityBridge : MonoBehaviour
             if (debugMenu == null)
             {
                 debugMenu = humanoid.gameObject.AddComponent<PoseDebugMenuSimple>();
-                // StartVisible = true so the window is shown on first load; user can hide it via the bottom bar.
+                // Debug menu hidden by default; inference handles depth signs automatically.
                 var startVisibleField = typeof(PoseDebugMenuSimple).GetField("startVisible", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                if (startVisibleField != null) startVisibleField.SetValue(debugMenu, true);
+                if (startVisibleField != null) startVisibleField.SetValue(debugMenu, false);
                 var driverField = typeof(PoseDebugMenuSimple).GetField("driver", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
                 if (driverField != null) driverField.SetValue(debugMenu, humanoid);
             }

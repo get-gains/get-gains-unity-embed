@@ -35,6 +35,8 @@ public class HumanoidPoseDriver : MonoBehaviour
     [SerializeField] private bool invertLandmarkX = true;
     [Tooltip("MLKit: negative Z = toward camera (front). When false, use MLKit Z as-is; enable only if front/back is flipped.")]
     [SerializeField] private bool invertLandmarkZ = false;
+    [Tooltip("When true, infer per-side arm/leg Z signs geometrically each frame instead of using the hardcoded debug flags.")]
+    [SerializeField] private bool useInferredDepthZ = true;
     [Tooltip("Flatten only Hips (spine) direction to XY to avoid Z-twist on torso.")]
     [SerializeField] private bool flattenDirectionsToXY = true;
     [Tooltip("If rig faces -Z (common), flip limb forward so bicep curl is in front, not behind.")]
@@ -237,6 +239,8 @@ public class HumanoidPoseDriver : MonoBehaviour
     private Quaternion _initialRootRotation = Quaternion.identity;
     private Vector3 _initialRootScale = Vector3.one;
 private float _currentBodyYaw;
+
+    private bool _isFirstYawFrame = true;
 
     /// <summary>Raw head facing computed before head-straightening smoothing; used for body yaw.</summary>
     private Vector3 _rawHeadFacingXZ;
@@ -463,7 +467,7 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             _hips.localPosition = _bindHipsLocalPos;
 
         // Rotate root so the model faces the inferred body direction.
-        float targetYaw = ComputeBodyYaw();
+        float targetYaw = ComputeUnifiedYaw();
         float maxDelta = bodyYawMaxSpeed * Time.deltaTime;
         _currentBodyYaw = Mathf.MoveTowardsAngle(_currentBodyYaw, targetYaw, maxDelta);
         if (_rootTransform != null)
@@ -506,67 +510,95 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
 
     /// <summary>
     /// Infers the Y-axis rotation that aligns the model's bind forward with the person's body forward.
-    /// Combines raw head facing (best at 45°), torso frame, and the recorded camera angle hint.
-    /// Falls back to the current yaw if no reliable forward vector is available.
+    /// Uses a weighted circular mean of three geometry signals — shoulder axis, hip axis, and ear depth
+    /// asymmetry — for a single robust estimator. The recording angle hint is used ONLY on the first
+    /// frame to break the 180° front/back ambiguity; from frame 2 onward the geometry drives everything.
     /// </summary>
-    private float ComputeBodyYaw()
+    private float ComputeUnifiedYaw()
     {
-        Vector3 forward = Vector3.zero;
-        bool hasForward = false;
-
-        // 1. Raw head facing from eye/ear depth asymmetry is the strongest 45° cue.
-        if (_rawHeadFacingXZ.sqrMagnitude > 1e-6f)
+        // Signal 1: shoulder axis in XZ plane
+        Vector3 shoulderYawSignal = Vector3.zero;
+        if (_pos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) &&
+            _pos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs))
         {
-            forward = _rawHeadFacingXZ;
-            hasForward = true;
-        }
-        // 2. Fall back to torso frame from shoulders/hips.
-        else if (PoseLandmarkMapping.TryComputeBodyForward(_pos, out Vector3 torsoForward))
-        {
-            forward = torsoForward;
-            hasForward = true;
+            shoulderYawSignal = new Vector3(rs.z - ls.z, 0f, rs.x - ls.x);
         }
 
-        if (!hasForward) return _currentBodyYaw;
-
-        Vector3 forwardXZ = Vector3.ProjectOnPlane(forward, Vector3.up).normalized;
-        if (forwardXZ.sqrMagnitude < 1e-6f) return _currentBodyYaw;
-
-        // Nose should be in front of the facing direction; if not, flip.
-        if (_pos.TryGetValue("NOSE", out Vector3 nose) &&
-            _pos.TryGetValue("MID_SHOULDER", out Vector3 midShoulder))
+        // Signal 2: hip axis in XZ plane
+        Vector3 hipYawSignal = Vector3.zero;
+        if (_pos.TryGetValue("LEFT_HIP", out Vector3 lh) &&
+            _pos.TryGetValue("RIGHT_HIP", out Vector3 rh))
         {
-            Vector3 noseDir = nose - midShoulder;
-            if (noseDir.sqrMagnitude > 1e-10f && Vector3.Dot(forwardXZ, noseDir) < 0f)
-                forwardXZ = -forwardXZ;
+            hipYawSignal = new Vector3(rh.z - lh.z, 0f, rh.x - lh.x);
         }
 
-        float yaw = Mathf.Atan2(forwardXZ.x, forwardXZ.z) * Mathf.Rad2Deg;
+        // Signal 3: ear depth asymmetry
+        Vector3 earYawSignal = Vector3.zero;
+        if (_pos.TryGetValue("LEFT_EAR", out Vector3 le) &&
+            _pos.TryGetValue("RIGHT_EAR", out Vector3 re))
+        {
+            float earZDiff = re.z - le.z;
+            earYawSignal = new Vector3(earZDiff, 0f, 1f);
+        }
 
-        // 3. Blend toward the camera-angle hint when it is provided and the
-        //    inferred yaw is close to it. This prevents the root from flipping
-        //    180° when depth noise makes the head/torso cues ambiguous.
-        if (!string.IsNullOrEmpty(recordingAngleHint))
+        // Confidence-weighted circular mean
+        float w1 = 0.45f, w2 = 0.35f, w3 = 0.20f;
+        float sx = 0f, sy = 0f, totalW = 0f;
+
+        if (shoulderYawSignal.sqrMagnitude > 1e-6f)
+        {
+            float a = Mathf.Atan2(shoulderYawSignal.x, shoulderYawSignal.z);
+            sx += w1 * Mathf.Cos(a);
+            sy += w1 * Mathf.Sin(a);
+            totalW += w1;
+        }
+
+        if (hipYawSignal.sqrMagnitude > 1e-6f)
+        {
+            float a = Mathf.Atan2(hipYawSignal.x, hipYawSignal.z);
+            sx += w2 * Mathf.Cos(a);
+            sy += w2 * Mathf.Sin(a);
+            totalW += w2;
+        }
+
+        if (earYawSignal.sqrMagnitude > 1e-6f)
+        {
+            float a = Mathf.Atan2(earYawSignal.x, earYawSignal.z);
+            sx += w3 * Mathf.Cos(a);
+            sy += w3 * Mathf.Sin(a);
+            totalW += w3;
+        }
+
+        if (totalW <= 0f) return _currentBodyYaw;
+
+        float rawYaw = Mathf.Atan2(sy, sx) * Mathf.Rad2Deg;
+
+        // FIRST FRAME ONLY: use hint to break 180° ambiguity, then discard.
+        if (_isFirstYawFrame && !string.IsNullOrEmpty(recordingAngleHint))
         {
             float? hintYaw = RecordingAngleToYaw(recordingAngleHint);
             if (hintYaw.HasValue)
             {
-                float delta = Mathf.DeltaAngle(yaw, hintYaw.Value);
-                // If inferred yaw is within 60° of the hint, pull it closer.
-                if (Mathf.Abs(delta) < 60f)
-                {
-                    yaw = Mathf.MoveTowardsAngle(yaw, hintYaw.Value, Mathf.Abs(delta) * 0.5f);
-                }
-                // If we have no strong head/torso cue, trust the hint entirely.
-                else if (_rawHeadFacingXZ.sqrMagnitude <= 1e-6f &&
-                         !PoseLandmarkMapping.TryComputeBodyForward(_pos, out _))
-                {
-                    yaw = hintYaw.Value;
-                }
+                float diff = Mathf.DeltaAngle(rawYaw, hintYaw.Value);
+                if (Mathf.Abs(diff) > 90f)
+                    rawYaw = Mathf.Repeat(rawYaw + 180f, 360f);
             }
+            _isFirstYawFrame = false;
         }
 
-        return yaw;
+        // Nose-in-front check for additional disambiguation (independent of hint).
+        if (_pos.TryGetValue("NOSE", out Vector3 nose) &&
+            _pos.TryGetValue("MID_SHOULDER", out Vector3 midShoulder))
+        {
+            Vector3 noseDir = nose - midShoulder;
+            Vector3 forwardXZ = new Vector3(
+                Mathf.Sin(rawYaw * Mathf.Deg2Rad), 0f,
+                Mathf.Cos(rawYaw * Mathf.Deg2Rad));
+            if (noseDir.sqrMagnitude > 1e-10f && Vector3.Dot(forwardXZ, noseDir) < 0f)
+                rawYaw = Mathf.Repeat(rawYaw + 180f, 360f);
+        }
+
+        return rawYaw;
     }
 
     /// <summary>
@@ -657,8 +689,17 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
         PoseLandmarkMapping.ApplyHeadClusterBlend(_pos, headReachScale, headDepthScale);
         if (_debugSwapArmLandmarks)
             ApplyDebugArmLandmarkSwap();
-        PoseLandmarkMapping.ApplyInvertArmWorldZ(_pos, _debugInvertArmDepthZ);
-        PoseLandmarkMapping.ApplyInvertLegWorldZ(_pos, _debugInvertLegDepthZ);
+
+        if (useInferredDepthZ)
+        {
+            PoseLandmarkMapping.ApplyInferArmZSigns(_pos);
+            PoseLandmarkMapping.ApplyInferLegZSigns(_pos);
+        }
+        else
+        {
+            PoseLandmarkMapping.ApplyInvertArmWorldZ(_pos, _debugInvertArmDepthZ);
+            PoseLandmarkMapping.ApplyInvertLegWorldZ(_pos, _debugInvertLegDepthZ);
+        }
 
         // Capture raw head facing BEFORE straightening rewrites the head cluster.
         // This is the most reliable hint for body yaw at 45° side angles.
@@ -859,15 +900,12 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
     /// <summary>
     /// Rotates arms/legs in model-local space. The root yaw has already been applied,
     /// so no per-bone Z flips are needed.
-    /// </summary>
-    /// <summary>
-    /// Rotates arms/legs in model-local space. The root yaw has already been applied,
-    /// so no per-bone Z flips are needed.
+    /// Confidence-gated (0.55 threshold) on all limbs, with Z-trust blending for
+    /// regime-aware smoothing at different camera angles.
     /// </summary>
     private void ApplyLimbRotationsModelLocal()
     {
-        bool isArmBone(string from, string to) =>
-            (from.Contains("SHOULDER") && to.Contains("ELBOW")) || (from.Contains("ELBOW") && to.Contains("WRIST"));
+        float zTrust = PoseLandmarkMapping.ComputeZTrustFactor(_modelLocalPos);
 
         foreach (var rb in _bones)
         {
@@ -882,10 +920,10 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             if (!_modelLocalPos.TryGetValue(rb.From, out Vector3 from)) continue;
             if (!_modelLocalPos.TryGetValue(rb.To, out Vector3 to)) continue;
 
-            bool isArm = isArmBone(rb.From, rb.To);
-            if (isArm && _confidence.TryGetValue(rb.From, out float cf) && _confidence.TryGetValue(rb.To, out float ct))
+            const float minConfidence = 0.55f;
+            if (_confidence.TryGetValue(rb.From, out float cf) && _confidence.TryGetValue(rb.To, out float ct))
             {
-                if (cf < 0.4f || ct < 0.4f) continue;
+                if (cf < minConfidence || ct < minConfidence) continue;
             }
 
             Vector3 targetDir = to - from;
@@ -896,7 +934,8 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             if (Vector3.Dot(rb.BindLocalDir, targetDir) < -0.999f) continue;
 
             Quaternion correction = Quaternion.FromToRotation(rb.BindLocalDir, targetDir);
-            correction = Quaternion.Slerp(Quaternion.identity, correction, rb.Blend);
+            float effectiveBlend = rb.Blend * Mathf.Max(zTrust, 0.2f);
+            correction = Quaternion.Slerp(Quaternion.identity, correction, effectiveBlend);
 
             // Anatomical joint limits: prevent knees/elbows/etc. from bending too far.
             correction = ClampJointCorrection(rb, correction);
@@ -1092,6 +1131,7 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
             _spine004.rotation = _bindSpine004WorldRot;
 
         _currentBodyYaw = 0f;
+        _isFirstYawFrame = true;
         _headForwardSmoothed = Vector3.zero;
         _rawHeadFacingXZ = Vector3.zero;
         _targetRootPosition = _initialRootPosition;

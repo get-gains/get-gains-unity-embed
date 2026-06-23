@@ -479,6 +479,58 @@ public static class PoseLandmarkMapping
         }
     }
 
+    /// <summary>
+    /// Infers whether arm-chain world Z should be inverted this frame.
+    /// After ToWorldPosition, negative Z = toward camera (front). If the average
+    /// shoulder Z is negative (person net-facing the camera), all arm Z is negated
+    /// so the bone solver reads the near-side limbs as "in front." This is the
+    /// symmetric, angle-agnostic replacement for the old hardcoded invertArmDepthZ flag.
+    /// </summary>
+    public static void ApplyInferArmZSigns(Dictionary<string, Vector3> worldPos)
+    {
+        if (worldPos == null) return;
+        if (!worldPos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) ||
+            !worldPos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs))
+            return;
+
+        float avgShoulderZ = (ls.z + rs.z) * 0.5f;
+        if (avgShoulderZ < 0f)
+            ApplyInvertArmWorldZ(worldPos, true);
+    }
+
+    /// <summary>
+    /// Infers whether leg-chain world Z should be inverted this frame.
+    /// Same symmetric logic as ApplyInferArmZSigns but uses average hip Z.
+    /// </summary>
+    public static void ApplyInferLegZSigns(Dictionary<string, Vector3> worldPos)
+    {
+        if (worldPos == null) return;
+        if (!worldPos.TryGetValue("LEFT_HIP", out Vector3 lh) ||
+            !worldPos.TryGetValue("RIGHT_HIP", out Vector3 rh))
+            return;
+
+        float avgHipZ = (lh.z + rh.z) * 0.5f;
+        if (avgHipZ < 0f)
+            ApplyInvertLegWorldZ(worldPos, true);
+    }
+
+    /// <summary>
+    /// Returns the Z-trust factor for this frame: 0.0 = Z is unreliable noise,
+    /// 1.0 = Z carries meaningful depth separation. Based on shoulder Z spread
+    /// normalized against a threshold (0.3 world units at default poseScale=5).
+    /// Near-frontal shots get low trust; oblique shots get high trust.
+    /// </summary>
+    public static float ComputeZTrustFactor(IReadOnlyDictionary<string, Vector3> modelLocalPos)
+    {
+        if (modelLocalPos == null) return 0f;
+        if (!modelLocalPos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) ||
+            !modelLocalPos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs))
+            return 0f;
+
+        float shoulderZSpread = Mathf.Abs(ls.z - rs.z);
+        return Mathf.Clamp01(shoulderZSpread / 0.3f);
+    }
+
     private static bool SegmentsIntersectOpen2D(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
     {
         float o1 = Orient2D(a, b, c);
