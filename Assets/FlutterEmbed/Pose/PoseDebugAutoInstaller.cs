@@ -16,7 +16,7 @@ public static class PoseDebugAutoInstaller
         // Start with stable defaults: X inverted for 2D→3D.
         // Z-sign inference replaces the old hardcoded invert flags (Fixes 2, 5).
         driver.InvertLandmarkX = true;
-        driver.InvertLandmarkZ = false;
+        driver.InvertLandmarkZ = true;
         driver.TorsoDebugFlatten = PoseLandmarkMapping.TorsoDebugFlattenMode.None;
         var fig = Object.FindAnyObjectByType<PoseStickFigureRenderer>(FindObjectsInactive.Exclude);
         if (fig != null)

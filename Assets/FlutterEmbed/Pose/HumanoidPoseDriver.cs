@@ -33,8 +33,8 @@ public class HumanoidPoseDriver : MonoBehaviour
 #pragma warning restore CS0414
     [Tooltip("Invert landmark X so left/right matches 2D (person left = Unity -X when facing +Z).")]
     [SerializeField] private bool invertLandmarkX = true;
-    [Tooltip("MLKit: negative Z = toward camera (front). When false, use MLKit Z as-is; enable only if front/back is flipped.")]
-    [SerializeField] private bool invertLandmarkZ = false;
+    [Tooltip("MLKit: negative Z = toward camera (front). When true, Z is negated so world Z+ = toward camera, matching Unity convention. This makes arm/leg depth deltas correct without additional inversion.")]
+    [SerializeField] private bool invertLandmarkZ = true;
     [Tooltip("When true, infer per-side arm/leg Z signs geometrically each frame instead of using the hardcoded debug flags.")]
     [SerializeField] private bool useInferredDepthZ = true;
     [Tooltip("Flatten only Hips (spine) direction to XY to avoid Z-twist on torso.")]
@@ -690,12 +690,15 @@ private Quaternion _bindHeadLocalToSpine004Local = Quaternion.identity;
         if (_debugSwapArmLandmarks)
             ApplyDebugArmLandmarkSwap();
 
-        if (useInferredDepthZ)
+        if (useInferredDepthZ && !invertLandmarkZ)
         {
+            // Inference only needed when invertLandmarkZ=false (old Z convention
+            // where world Z- = toward camera). With invertLandmarkZ=true, the
+            // Z convention is already correct and no additional inversion is needed.
             PoseLandmarkMapping.ApplyInferArmZSigns(_pos);
             PoseLandmarkMapping.ApplyInferLegZSigns(_pos);
         }
-        else
+        else if (!useInferredDepthZ)
         {
             PoseLandmarkMapping.ApplyInvertArmWorldZ(_pos, _debugInvertArmDepthZ);
             PoseLandmarkMapping.ApplyInvertLegWorldZ(_pos, _debugInvertLegDepthZ);

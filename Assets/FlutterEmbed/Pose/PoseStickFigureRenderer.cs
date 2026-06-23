@@ -16,8 +16,8 @@ public class PoseStickFigureRenderer : MonoBehaviour
     [SerializeField] private float depthScale = 5f;
     [Tooltip("Invert X to match 2D raw vertices (must match HumanoidPoseDriver.invertLandmarkX).")]
     [SerializeField] private bool invertLandmarkX = true;
-    [Tooltip("Depth flip on mapped Z; must match HumanoidPoseDriver.invertLandmarkZ for alignment.")]
-    [SerializeField] private bool invertLandmarkZ = false;
+    [Tooltip("Depth flip on mapped Z; must match HumanoidPoseDriver.invertLandmarkZ for alignment. True = world Z+ toward camera.")]
+    [SerializeField] private bool invertLandmarkZ = true;
     [Tooltip("Z from MLKit is not 0-1; divide by this before scaling (match HumanoidPoseDriver.zNormalizeScale).")]
     [SerializeField] private float zNormalizeScale = 100f;
     [Tooltip("Clamp raw X,Y to this range (match HumanoidPoseDriver.xyClampMin/Max).")]
@@ -259,12 +259,12 @@ public class PoseStickFigureRenderer : MonoBehaviour
 
         PoseLandmarkMapping.ApplyHeadClusterBlend(positions, headReachScale, headDepthScale);
 
-        if (useInferredDepthZ)
+        if (useInferredDepthZ && !invertLandmarkZ)
         {
             PoseLandmarkMapping.ApplyInferArmZSigns(positions);
             PoseLandmarkMapping.ApplyInferLegZSigns(positions);
         }
-        else
+        else if (!useInferredDepthZ)
         {
             PoseLandmarkMapping.ApplyInvertArmWorldZ(positions, _debugInvertArmDepthZ);
             PoseLandmarkMapping.ApplyInvertLegWorldZ(positions, _debugInvertLegDepthZ);
