@@ -235,11 +235,93 @@ public static class PoseLandmarkMapping
     }
 
     /// <summary>
+    /// Computes a stable body forward vector from torso landmarks.
+    /// Returns false if no usable shoulder/hip frame.
+    /// Forward points in the direction the chest/face is facing (toward the camera for a front view).
+    /// </summary>
+    /// <param name="worldPos">Mapped landmark positions in world/pose space.</param>
+    /// <param name="forward">Output unit forward vector.</param>
+    public static bool TryComputeBodyForward(IReadOnlyDictionary<string, Vector3> worldPos, out Vector3 forward)
+    {
+        forward = default;
+        if (worldPos == null || worldPos.Count == 0) return false;
+
+        if (!worldPos.TryGetValue("MID_SHOULDER", out Vector3 midShoulder))
+        {
+            if (worldPos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) &&
+                worldPos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs))
+                midShoulder = 0.5f * (ls + rs);
+            else
+                return false;
+        }
+
+        if (!worldPos.TryGetValue("MID_HIP", out Vector3 midHip))
+        {
+            if (worldPos.TryGetValue("LEFT_HIP", out Vector3 lh) &&
+                worldPos.TryGetValue("RIGHT_HIP", out Vector3 rh))
+                midHip = 0.5f * (lh + rh);
+            else
+                return false;
+        }
+
+        Vector3 spineUp = midShoulder - midHip;
+        if (spineUp.sqrMagnitude < 1e-10f) return false;
+        spineUp.Normalize();
+
+        float torsoLen = Vector3.Distance(midHip, midShoulder);
+        float minSpan = Mathf.Max(torsoLen * 0.09f, 0.01f);
+        if (!TryGetStableShoulderHorizontal(worldPos, spineUp, minSpan, out Vector3 shoulderHoriz, out _))
+            return false;
+
+        forward = Vector3.Cross(shoulderHoriz, spineUp);
+        if (forward.sqrMagnitude < 1e-10f) return false;
+        forward.Normalize();
+
+        // Nose should be in front of this forward; if not, flip.
+        if (worldPos.TryGetValue("NOSE", out Vector3 nose))
+        {
+            Vector3 rawNoseDir = nose - midShoulder;
+            if (rawNoseDir.sqrMagnitude > 1e-10f && Vector3.Dot(forward, rawNoseDir) < 0f)
+                forward = -forward;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Infers horizontal facing direction from the eye→ear depth offset.
+    /// When the head is turned 45°, the ear on the side facing the camera is closer
+    /// (smaller raw Z) than the eye on that side, while the opposite side is farther.
+    /// The vector from ear-mid to eye-mid projected onto XZ gives a robust facing hint.
+    /// </summary>
+    /// <param name="worldPos">Mapped landmark positions in world/pose space.</param>
+    /// <param name="facing">Output unit facing vector in the XZ plane.</param>
+    /// <returns>True if eyes and ears are present.</returns>
+    public static bool TryComputeHeadFacingXZ(IReadOnlyDictionary<string, Vector3> worldPos, out Vector3 facing)
+    {
+        facing = default;
+        if (!worldPos.TryGetValue("LEFT_EAR", out Vector3 leftEar) ||
+            !worldPos.TryGetValue("RIGHT_EAR", out Vector3 rightEar) ||
+            !worldPos.TryGetValue("LEFT_EYE", out Vector3 leftEye) ||
+            !worldPos.TryGetValue("RIGHT_EYE", out Vector3 rightEye))
+            return false;
+
+        Vector3 earMid = 0.5f * (leftEar + rightEar);
+        Vector3 eyeMid = 0.5f * (leftEye + rightEye);
+        Vector3 forward = eyeMid - earMid;
+        forward.y = 0f;
+        if (forward.sqrMagnitude < 1e-10f)
+            return false;
+        facing = forward.normalized;
+        return true;
+    }
+
+    /// <summary>
     /// Left–right in the shoulder girdle, stable in side view: project shoulder line onto plane ⊥ spine,
     /// fall back to projected hip line, then a geometry-only axis so normalization does not chase depth noise.
     /// </summary>
-    private static bool TryGetStableShoulderHorizontal(
-        Dictionary<string, Vector3> worldPos,
+    public static bool TryGetStableShoulderHorizontal(
+        IReadOnlyDictionary<string, Vector3> worldPos,
         Vector3 spineUpUnit,
         float minSpan,
         out Vector3 shoulderHorizUnit,
@@ -395,6 +477,58 @@ public static class PoseLandmarkMapping
             pos["LEFT_HIP"] = new Vector3(mx, lh.y, lh.z);
             pos["RIGHT_HIP"] = new Vector3(mx, rh.y, rh.z);
         }
+    }
+
+    /// <summary>
+    /// Infers whether arm-chain world Z should be inverted this frame.
+    /// After ToWorldPosition, negative Z = toward camera (front). If the average
+    /// shoulder Z is negative (person net-facing the camera), all arm Z is negated
+    /// so the bone solver reads the near-side limbs as "in front." This is the
+    /// symmetric, angle-agnostic replacement for the old hardcoded invertArmDepthZ flag.
+    /// </summary>
+    public static void ApplyInferArmZSigns(Dictionary<string, Vector3> worldPos)
+    {
+        if (worldPos == null) return;
+        if (!worldPos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) ||
+            !worldPos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs))
+            return;
+
+        float avgShoulderZ = (ls.z + rs.z) * 0.5f;
+        if (avgShoulderZ < 0f)
+            ApplyInvertArmWorldZ(worldPos, true);
+    }
+
+    /// <summary>
+    /// Infers whether leg-chain world Z should be inverted this frame.
+    /// Same symmetric logic as ApplyInferArmZSigns but uses average hip Z.
+    /// </summary>
+    public static void ApplyInferLegZSigns(Dictionary<string, Vector3> worldPos)
+    {
+        if (worldPos == null) return;
+        if (!worldPos.TryGetValue("LEFT_HIP", out Vector3 lh) ||
+            !worldPos.TryGetValue("RIGHT_HIP", out Vector3 rh))
+            return;
+
+        float avgHipZ = (lh.z + rh.z) * 0.5f;
+        if (avgHipZ < 0f)
+            ApplyInvertLegWorldZ(worldPos, true);
+    }
+
+    /// <summary>
+    /// Returns the Z-trust factor for this frame: 0.0 = Z is unreliable noise,
+    /// 1.0 = Z carries meaningful depth separation. Based on shoulder Z spread
+    /// normalized against a threshold (0.3 world units at default poseScale=5).
+    /// Near-frontal shots get low trust; oblique shots get high trust.
+    /// </summary>
+    public static float ComputeZTrustFactor(IReadOnlyDictionary<string, Vector3> modelLocalPos)
+    {
+        if (modelLocalPos == null) return 0f;
+        if (!modelLocalPos.TryGetValue("LEFT_SHOULDER", out Vector3 ls) ||
+            !modelLocalPos.TryGetValue("RIGHT_SHOULDER", out Vector3 rs))
+            return 0f;
+
+        float shoulderZSpread = Mathf.Abs(ls.z - rs.z);
+        return Mathf.Clamp01(shoulderZSpread / 0.3f);
     }
 
     private static bool SegmentsIntersectOpen2D(Vector2 a, Vector2 b, Vector2 c, Vector2 d)

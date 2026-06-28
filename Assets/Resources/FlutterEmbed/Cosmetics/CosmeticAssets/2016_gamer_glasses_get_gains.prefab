@@ -46,8 +46,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CosmeticAttachment
   anchorKind: 1
-  localOffset: {x: 0, y: 0, z: 0}
-  localRotation: {x: 0, y: 0, z: 0}
+  localOffset: {x: 0.017, y: -1.547, z: 0.114}
+  localRotation: {x: -0.064766, y: 0.003851, z: 0.002825, w: 0.997889}
   localScale: {x: 1, y: 1, z: 1}
   focusHeightBias: 0.38
 --- !u!1 &9067190990587967071
@@ -75,8 +75,8 @@ Transform:
   m_GameObject: {fileID: 9067190990587967071}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0.011818739, y: -1.1729014, z: -0.096829444}
-  m_LocalScale: {x: 0.7320071, y: 0.7320071, z: 0.7320071}
+  m_LocalPosition: {x: 0.011818739, y: 0.061400905, z: -0.04025356}
+  m_LocalScale: {x: 0.9421198, y: 0.9421198, z: 0.9421198}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 6133501781397679252}

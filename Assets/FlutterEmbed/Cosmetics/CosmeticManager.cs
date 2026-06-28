@@ -65,9 +65,9 @@ public class CosmeticManager : MonoBehaviour
             return;
         }
 
-        headAnchor ??= FindOrCreateAnchor(headBone, "CosmeticAnchor_Head", Vector3.zero, Quaternion.identity);
-        facewearAnchor ??= FindOrCreateAnchor(headBone, "CosmeticAnchor_Face", new Vector3(0f, 0.06f, 0.08f), Quaternion.identity);
-        hatTopAnchor ??= FindOrCreateAnchor(headBone, "CosmeticAnchor_HatTop", new Vector3(0f, 0.11f, 0f), Quaternion.identity);
+        if (headAnchor == null) headAnchor = FindOrCreateAnchor(headBone, "CosmeticAnchor_Head", Vector3.zero, Quaternion.identity);
+        if (facewearAnchor == null) facewearAnchor = FindOrCreateAnchor(headBone, "CosmeticAnchor_Face", new Vector3(0f, 0.06f, 0.08f), Quaternion.identity);
+        if (hatTopAnchor == null) hatTopAnchor = FindOrCreateAnchor(headBone, "CosmeticAnchor_HatTop", new Vector3(0f, 0.11f, 0f), Quaternion.identity);
     }
 
     private static Transform FindOrCreateAnchor(Transform headBone, string name, Vector3 localPos, Quaternion localRot)
@@ -201,9 +201,9 @@ public class CosmeticManager : MonoBehaviour
         }
         var parent = ResolveParent(attach.anchorKind);
         instance.transform.SetParent(parent, false);
-        instance.transform.localPosition = Vector3.zero;
-        instance.transform.localRotation = Quaternion.identity;
-        instance.transform.localScale = Vector3.one;
+        instance.transform.localPosition = attach.localOffset;
+        instance.transform.localRotation = attach.localRotation;
+        instance.transform.localScale = attach.localScale;
         _equippedRoots.Add(instance);
     }
 

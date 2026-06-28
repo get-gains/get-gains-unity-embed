@@ -170,24 +170,7 @@ public class PoseDebugMenuSimple : MonoBehaviour
         }
     }
 
-    private void OnGUI()
-    {
-        if (_hiddenForCosmeticMode) return;
-
-        GUI.depth = -1000;
-
-        float x = buttonPadding;
-        float y = Screen.height - buttonPadding - buttonHeight;
-        Rect buttonRect = new Rect(x, y, Screen.width - 2f * buttonPadding, buttonHeight);
-        var style = new GUIStyle(GUI.skin.button) { fontSize = 28, alignment = TextAnchor.MiddleCenter };
-        string label = _visible ? "HIDE POSE DEBUG" : "SHOW POSE DEBUG";
-        if (GUI.Button(buttonRect, label, style))
-            _visible = !_visible;
-
-        if (!_visible || driver == null) return;
-
-        _windowRect = GUILayout.Window(0, _windowRect, DrawWindow, "Pose Debug");
-    }
+private void OnGUI() { }
 
     private void DrawWindow(int id)
     {

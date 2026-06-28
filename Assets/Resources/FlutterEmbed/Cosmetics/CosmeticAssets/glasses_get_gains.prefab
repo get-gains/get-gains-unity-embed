@@ -46,9 +46,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CosmeticAttachment
   anchorKind: 1
-  localOffset: {x: 0, y: 0, z: 0}
-  localRotation: {x: 0, y: 0, z: 0}
-  localScale: {x: 1, y: 1, z: 1}
+  localOffset: {x: 0.005, y: 0.033, z: -0.023}
+  localRotation: {x: 0, y: -0.707107, z: -0.707107, w: 0}
+  localScale: {x: 1.3, y: 1.3, z: 1.3}
   focusHeightBias: 0.38
 --- !u!1 &6543615033805439988
 GameObject:

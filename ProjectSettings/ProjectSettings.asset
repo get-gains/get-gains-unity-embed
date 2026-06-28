@@ -833,7 +833,7 @@ PlayerSettings:
   scriptingBackend:
     Android: 1
   il2cppCompilerConfiguration:
-    Android: 0
+    Android: 1
   il2cppCodeGeneration:
     Android: 0
   il2cppStacktraceInformation: {}
